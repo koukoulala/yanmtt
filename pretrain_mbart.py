@@ -95,7 +95,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
         print("We will do fp16 training")
         scaler = torch.cuda.amp.GradScaler()
     else:
-        print("We will do fp32 training")
+        print("We won't do fp32 training")
     
     if args.encoder_tying_config is not None:
         print("We will use recurrently stacked layers for the encoder with configuration:", args.encoder_tying_config)
@@ -130,6 +130,12 @@ def model_create_load_run_save(gpu, args, files, train_files):
     else:
         config = MBartConfig(vocab_size=len(tok), encoder_layers=args.encoder_layers, decoder_layers=args.decoder_layers, dropout=args.dropout, attention_dropout=args.attention_dropout, activation_dropout=args.activation_dropout, encoder_attention_heads=args.encoder_attention_heads, decoder_attention_heads=args.decoder_attention_heads, encoder_ffn_dim=args.encoder_ffn_dim, decoder_ffn_dim=args.decoder_ffn_dim, d_model=args.d_model, no_embed_norm=args.no_embed_norm, scale_embedding=args.scale_embedding, pad_token_id=tok.pad_token_id, eos_token_id=tok(["</s>"], add_special_tokens=False).input_ids[0][0], bos_token_id=tok(["<s>"], add_special_tokens=False).input_ids[0][0], encoder_tying_config=args.encoder_tying_config, decoder_tying_config=args.decoder_tying_config, multilayer_softmaxing=args.multilayer_softmaxing, wait_k=args.wait_k, unidirectional_encoder=args.unidirectional_encoder, softmax_temperature=args.softmax_temperature, temperature_calibration=args.temperature_calibration, encoder_layerdrop=args.layerdrop, decoder_layerdrop=args.layerdrop, no_scale_attention_embedding=args.no_scale_attention_embedding, positional_encodings=args.positional_encodings, num_domains_for_domain_classifier=args.num_domains_for_domain_classifier, gradient_reversal_for_domain_classifier=args.gradient_reversal_for_domain_classifier) ## Configuration. TODO: Save this configuration somehow.
         model = MBartForConditionalGeneration(config)
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        n_gpu = torch.cuda.device_count()
+        print("n_gpu=", n_gpu, device)
+
     torch.cuda.set_device(gpu)
 
     model.cuda(gpu)
@@ -152,7 +158,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
     
     model.train()
     scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, args.num_batches) ## A warmup and decay scheduler. We use the linear scheduler for now. TODO: Enable other schedulers with a flag.
-    while scheduler.get_lr()[0] < 1e-8: ## We want to keep a minimum learning rate else for the initial batch or initial few batches barely anything will be learned which is a waste of computation. This minimum value is kept to 1e-7 by default in accordance with previous literature, other implementations and the Paris peace accords.
+    while scheduler.get_lr()[0] < 1e-9: ## We want to keep a minimum learning rate else for the initial batch or initial few batches barely anything will be learned which is a waste of computation. This minimum value is kept to 1e-7 by default in accordance with previous literature, other implementations and the Paris peace accords.
         scheduler.step()
     print("Initial LR is:", scheduler.get_lr()[0])
 
@@ -240,7 +246,9 @@ def model_create_load_run_save(gpu, args, files, train_files):
             if rank == 0:
                 writer.add_scalar("encoder unification loss", loss.detach().cpu().numpy(), ctr)
         else:
-            mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids, output_hidden_states=args.distillation, output_attentions=args.distillation, label_mask=label_mask if args.num_domains_for_domain_classifier > 1 else None) ## Run the model and get logits.
+            mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids,
+                                output_hidden_states=args.distillation, output_attentions=args.distillation,
+                                label_mask=None) ## Run the model and get logits.
             logits = mod_compute.logits
             lprobs = torch.nn.functional.log_softmax(logits, dim=-1) ## Softmax tempering of logits if needed.
             loss = label_smoothed_nll_loss(
@@ -404,11 +412,11 @@ def run_demo():
     parser.add_argument('--multistep_optimizer_steps', default=1, type=int, help="In case you want to simulate a larger batch you should set this to a higher value.")
     parser.add_argument('--encoder_layers', default=6, type=int, help="The value for number of encoder layers")
     parser.add_argument('--decoder_layers', default=6, type=int, help="The value for number of decoder layers")
-    parser.add_argument('--max_length', default=128, type=int, 
+    parser.add_argument('--max_length', default=512, type=int,
                         help='Maximum sequence length for training')
-    parser.add_argument('--max_src_length', default=256, type=int, 
+    parser.add_argument('--max_src_length', default=512, type=int,
                         help='Maximum token length for source language')
-    parser.add_argument('--max_tgt_length', default=256, type=int, 
+    parser.add_argument('--max_tgt_length', default=512, type=int,
                         help='Maximum token length for target language')
     parser.add_argument('--hard_truncate_length', default=0, type=int, 
                         help='Should we perform a hard truncation of the batch? This will be needed to eliminate cuda caching errors for when sequence lengths exceed a particular limit. This means self attention matrices will be massive and I used to get errors. Choose this value empirically.')
@@ -417,7 +425,7 @@ def run_demo():
     parser.add_argument('--batch_size_indicates_lines', action='store_true', 
                         help='Should we batch as a fixed number of lines?')
     parser.add_argument('--label_smoothing', default=0.1, type=float, help="The value for label smoothing.")
-    parser.add_argument('--lr', default=1e-3, type=float, help="The value for the learning rate")
+    parser.add_argument('--lr', default=1e-5, type=float, help="The value for the learning rate")
     parser.add_argument('--weight_decay', default=0.00001, type=float, help="The value for weight decay")
     parser.add_argument('--layerdrop', default=0.0, type=float, help="The value for layerdrop which indicates the probability that a whole layer will be bypassed via an identity transformation.")
     parser.add_argument('--dropout', default=0.1, type=float, help="The value for embedding dropout")
