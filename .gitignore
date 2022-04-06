@@ -1,3 +1,8 @@
+res/
+backup/
+ckpts/
+.idea/
+
 *pt
 *.model
 !.gitignore

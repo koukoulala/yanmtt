@@ -70,6 +70,14 @@ rcParams['font.sans-serif'] = ['Source Han Sans TW',
 torch.manual_seed(621311)
 ##
 
+def save_ckpt(args, model, tokenizer, out_dir):
+    model_to_save = (
+        model.module if hasattr(model, "module") else model
+    )  # Take care of distributed/parallel training
+    model_to_save.save_pretrained(out_dir)
+    tokenizer.save_pretrained(out_dir)
+    torch.save(args, os.path.join(out_dir, "training_args.bin"))
+
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None):
     """From fairseq. This returns the label smoothed cross entropy loss."""
     if target.dim() == lprobs.dim() - 1:

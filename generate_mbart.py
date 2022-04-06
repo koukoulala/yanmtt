@@ -65,31 +65,19 @@ from prefetch_generator import BackgroundGenerator
 torch.manual_seed(621311)
 ##
 
-def model_create_load_run_save(gpu, args, train_files, dev_files, quit_condition):
+def model_create_load_run_save(gpu, args, train_files, dev_files):
     """The main function which does the overall training. Should be split into multiple parts in the future. Currently monolithc intentionally."""
     
-    rank = args.nr * args.gpus + gpu ## The rank of the current process out of the total number of processes indicated by world_size.
+    rank = 0 ## The rank of the current process out of the total number of processes indicated by world_size.
     print("Launching process:", rank)
-    dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
-    
-    if args.shard_files and rank == 0: ## First shard the data using process 0 aka the prime process or master process. Other processes will wait.
+
+    if args.shard_files: ## First shard the data using process 0 aka the prime process or master process. Other processes will wait.
         shard_files_bi(train_files, args)
-    
-    dist.barrier() ## Stop other processes from proceeding till sharding is done.
 
     tok = MBartTokenizer.from_pretrained(args.tokenizer_name_or_path)
-
-    scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=False) ## In case we do summarization.
-
     print("Tokenizer is:", tok)
     
-    print(f"Running DDP checkpoint example on rank {rank}.")
-    
-    if args.fp16: ## Although the code supports FP16/AMP training, it tends to be unstable in distributed setups so use this carefully.
-        print("We will do fp16 training")
-        scaler = torch.cuda.amp.GradScaler() ## Gradient scaler which will be used with torch's automatic mixed precision
-    else:
-        print("We won't do fp32 training")
+    print("We won't do fp32 training")
     
     if args.encoder_tying_config is not None:
         print("We will use recurrently stacked layers for the encoder with configuration:", args.encoder_tying_config)
@@ -99,65 +87,20 @@ def model_create_load_run_save(gpu, args, train_files, dev_files, quit_condition
     if args.unidirectional_encoder:
         print("Using unidirectional encoder.")
     
-    if rank == 0:
-        writer = SummaryWriter(args.model_path+".tflogs")
-    
     if args.use_official_pretrained:
         config = MBartConfig.from_pretrained(args.pretrained_model)
-        '''
-        config.dropout = args.dropout ## We should set dropouts manually
-        config.attention_dropout = args.attention_dropout ## We should set dropouts manually
-        config.activation_dropout = args.activation_dropout ## We should set dropouts manually
-        config.encoder_layerdrop = args.layerdrop ## We should set dropouts manually
-        config.decoder_layerdrop = args.layerdrop ## We should set dropouts manually
-        '''
         model = MBartForConditionalGeneration.from_pretrained(args.pretrained_model, config=config) ## We may use FBs official model and fine-tune it for our purposes.
     else:
         config = MBartConfig(vocab_size=len(tok), encoder_layers=args.encoder_layers, decoder_layers=args.decoder_layers, dropout=args.dropout, attention_dropout=args.attention_dropout, activation_dropout=args.activation_dropout, encoder_attention_heads=args.encoder_attention_heads, decoder_attention_heads=args.decoder_attention_heads, encoder_ffn_dim=args.encoder_ffn_dim, decoder_ffn_dim=args.decoder_ffn_dim, d_model=args.d_model, no_embed_norm=args.no_embed_norm, scale_embedding=args.scale_embedding, pad_token_id=tok.pad_token_id, eos_token_id=tok(["</s>"], add_special_tokens=False).input_ids[0][0], bos_token_id=tok(["<s>"], add_special_tokens=False).input_ids[0][0], encoder_tying_config=args.encoder_tying_config, decoder_tying_config=args.decoder_tying_config, multilayer_softmaxing=args.multilayer_softmaxing, wait_k=args.wait_k, additional_source_wait_k=args.additional_source_wait_k, unidirectional_encoder=args.unidirectional_encoder, multi_source=args.multi_source, multi_source_method=args.multi_source_method, softmax_temperature=args.softmax_temperature, temperature_calibration=args.temperature_calibration, encoder_layerdrop=args.layerdrop, decoder_layerdrop=args.layerdrop, no_scale_attention_embedding=args.no_scale_attention_embedding, positional_encodings=args.positional_encodings, num_domains_for_domain_classifier=args.num_domains_for_domain_classifier, gradient_reversal_for_domain_classifier=args.gradient_reversal_for_domain_classifier) ## Configuration. TODO: Save this configuration somehow.
         model = MBartForConditionalGeneration(config)
-    model.train()
 
-    torch.cuda.set_device(gpu) ## Set the device to the current GPU. This is different from the rank so keep this in mind.
-    
-    if args.freeze_embeddings: ## If we wish to freeze the model embeddings. This may be useful when fine-tuning a pretrained model.
-        print("Freezing embeddings")
-        freeze_embeds(model)
-    if args.freeze_encoder: ## If we wish to freeze the encoder itself. This may be useful when fine-tuning a pretrained model.
-        print("Freezing encoder")
-        freeze_params(model.get_encoder())
-        assert_all_frozen(model.get_encoder())
+    device = torch.device("cuda")
+    n_gpu = torch.cuda.device_count()
+    print("n_gpu=", n_gpu, device)
 
-    model.cuda(gpu) ## Move the model to the GPU.
-
-    model = DistributedDataParallel(model, device_ids=[gpu], output_device=gpu) ## This wrapper around the model will enable distributed training.
-    
-    if args.pretrained_model != "" and not args.use_official_pretrained: ## Here we load a pretrained NMT model or a previous checkpoint in case training crashed.
-        print("Loading from checkpoint. Strict loading by default but if there are missing or non matching keys, they will be ignored when layer remapping or component selection is done.")
-        dist.barrier()
-        # configure map_location properly
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
-        checkpoint_dict = torch.load(args.pretrained_model, map_location=map_location)
-        if type(checkpoint_dict) == dict:
-            model.load_state_dict(remap_embeddings_eliminate_components_and_eliminate_mismatches(model.state_dict(), remap_layers(checkpoint_dict['model'], 4, args), args), strict=True if (args.remap_encoder == "" and args.remap_decoder == "" and not args.eliminate_encoder_before_initialization and not args.eliminate_decoder_before_initialization and not args.eliminate_embeddings_before_initialization) else False)
-            ctr = 0
-        else:
-            model.module.load_state_dict(remap_embeddings_eliminate_components_and_eliminate_mismatches(model.state_dict(), remap_layers(checkpoint_dict, 3, args), args), strict=True if (args.remap_encoder == "" and args.remap_decoder == "" and not args.eliminate_encoder_before_initialization and not args.eliminate_decoder_before_initialization and not args.eliminate_embeddings_before_initialization) else False)
-            ctr = 0
-    else:
-        if args.use_official_pretrained:
-            print("Training from official pretrained model")
-        else:
-            print("Training from scratch")
-        CHECKPOINT_PATH = args.model_path
-        if rank == 0:
-            checkpoint_dict = {'model': model.state_dict(), 'ctr': 0}
-            torch.save(checkpoint_dict, CHECKPOINT_PATH) ## Save a model by default every eval_every steps. This model will be saved with the same file name each time.
-            torch.save(model.state_dict(), CHECKPOINT_PATH+".pure_model")
-        dist.barrier()
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
-        checkpoint_dict = torch.load(CHECKPOINT_PATH, map_location=map_location)
-        model.load_state_dict(checkpoint_dict['model'])
-        ctr = checkpoint_dict['ctr']
+    model.to(device)
+    if n_gpu > 1:
+        model = torch.nn.DataParallel(model)
 
     print("Using label smoothing of", args.label_smoothing)
     print("Using gradient clipping norm of", args.max_gradient_clip_value)
@@ -179,14 +122,16 @@ def model_create_load_run_save(gpu, args, train_files, dev_files, quit_condition
         slangtlang = dev_pair.strip().split("-")
         slang = slangtlang[0]
         tlang = slangtlang[1]
-        eval_batch_counter = 0
         for dev_input_ids, dev_input_masks in generate_batches_eval_bilingual(tok, args, inps[dev_pair], slang):
             start = time.time()
-            dev_input_ids = dev_input_ids.to(gpu)  ## Move to GPU.
-            dev_input_masks = dev_input_masks.to(gpu)  ## Move to GPU.
+            dev_input_ids = dev_input_ids.to(device)  ## Move to GPU.
+            dev_input_masks = dev_input_masks.to(device)  ## Move to GPU.
             print("Decoding batch from a pool of", len(inps[dev_pair]), "examples")
             with torch.no_grad():  ## torch.no_grad is apparently known to prevent the code from allocating memory for gradient computation in addition to making things faster. I have not verified this but have kept it as a safety measure to ensure that my model is not being directly tuned on the development set.
-                translations = model.module.generate(dev_input_ids, use_cache=True, num_beams=1,
+                model_to_generate = (
+                    model.module if hasattr(model, "module") else model
+                )
+                translations = model_to_generate.generate(dev_input_ids, use_cache=True, num_beams=1,
                                                      max_length=int((len(dev_input_ids[0]) * args.max_decode_length_multiplier) if args.max_decode_length_multiplier > 0 else -args.max_decode_length_multiplier),
                                                      min_length=int((len(dev_input_ids[0]) * args.min_decode_length_multiplier) if args.min_decode_length_multiplier > 0 else -args.min_decode_length_multiplier),
                                                      early_stopping=True, attention_mask=dev_input_masks,
@@ -200,8 +145,6 @@ def model_create_load_run_save(gpu, args, train_files, dev_files, quit_condition
                                                      no_repeat_ngram_size=args.no_repeat_ngram_size,
                                                      additional_input_ids=None,
                                                      additional_input_ids_mask=None)  ## We translate the batch.
-            dev_input_ids = dev_input_ids.to('cpu')  ## Move to cpu. Not needed but its a safe step.
-            dev_input_masks = dev_input_masks.to('cpu')  ## Move to cpu. Not needed but its a safe step.
             translations = translations.to('cpu')  ## Move to cpu. Not needed but its a safe step.
             for translation in translations:
                 translation = tok.decode(translation, skip_special_tokens=args.no_skip_special_tokens,
@@ -211,7 +154,7 @@ def model_create_load_run_save(gpu, args, train_files, dev_files, quit_condition
         sbleu = get_sacrebleu(refs[dev_pair], hyp[dev_pair])
         metric = 'BLEU'
 
-        individual_sbleu_history[dev_pair].append([sbleu, ctr])  ## Update the score history for this pair.
+        individual_sbleu_history[dev_pair].append(sbleu)  ## Update the score history for this pair.
         sbleus[dev_pair] = sbleu
         print(metric, "score using sacrebleu is", sbleu, "for language pair", dev_pair)
 
@@ -219,10 +162,6 @@ def model_create_load_run_save(gpu, args, train_files, dev_files, quit_condition
         with open(os.path.join(args.model_path, dev_pair + ".txt"), 'w') as f:
             for line in hyp[dev_pair]:
                 f.write(line + '\n')
-    
-
-    dist.barrier() ## Wait till all processes reach this point so that the prime process saves the final checkpoint.
-    dist.destroy_process_group() ## Everything that has a beginning has an end, Neo!
     
 
 def run_demo():
@@ -314,9 +253,9 @@ def run_demo():
                         help='Should we batch as a fixed number of lines?')
     parser.add_argument('--dev_batch_size', default=1024, type=int, 
                         help='Dev batch sizes in lines')
-    parser.add_argument('--max_src_length', default=256, type=int, 
+    parser.add_argument('--max_src_length', default=512, type=int,
                         help='Maximum token length for source language')
-    parser.add_argument('--max_tgt_length', default=256, type=int, 
+    parser.add_argument('--max_tgt_length', default=512, type=int,
                         help='Maximum token length for target language')
     parser.add_argument('--early_stop_checkpoints', default=10, type=int, 
                         help='Number of checkpoints to wait to see if BLEU increases.')
@@ -433,7 +372,7 @@ def run_demo():
     assert len(args.token_masking_probs_range) <= 2
     print("IP address is", args.ipaddr)
     
-    args.world_size = args.gpus * args.nodes                #
+    args.world_size = args.gpus               #
 
     train_files = {}
 
@@ -445,10 +384,8 @@ def run_demo():
     print("Development files are:", dev_files)
     
     os.environ['MASTER_ADDR'] = args.ipaddr              #
-    os.environ['MASTER_PORT'] = args.port                      #
-    quit_condition = torch.ones(1) ## Create a variable to hold the quitting condition trigger
-    quit_condition.share_memory_() ## Share this among all processes
-    mp.spawn(model_create_load_run_save, nprocs=args.gpus, args=(args,train_files, dev_files, quit_condition))         #
+    os.environ['MASTER_PORT'] = args.port
+    model_create_load_run_save(args.gpus, args, train_files, dev_files)
     
 if __name__ == "__main__":
     run_demo()
