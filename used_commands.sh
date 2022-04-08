@@ -17,3 +17,10 @@ nohup python -u generate_mbart.py -n 1  -nr 0 -g 1 --model_path examples/models/
 # 12.19
 "python -m pip install virtualenv --user && python -m virtualenv /tmp/env_pretrain_de && . /tmp/env_pretrain_de/bin/activate && python -m pip install -r requirements.txt && cd transformers && python setup.py install && cd .. && python -u pretrain_mbart.py -n 1  -nr 0 -g 1  --model_path=res/pretrain_de/12.19 --use_official_pretrained --pretrained_model=[#input-previous-model-path] --tokenizer_name_or_path=[#input-previous-model-path] --langs=en,de --mono_src=[#input-training-data-path]/xglue.ntg.en.src.train,[#input-training-data-path]/xglue.ntg.de.src.train --shard_files --lr=1e-5 --batch_size=1024 --no_reload_optimizer_ctr_and_scheduler"
 "python -m pip install virtualenv --user && python -m virtualenv /tmp/env_pretrain_@@lang@@ && . /tmp/env_pretrain_@@lang@@/bin/activate && python -m pip install -r requirements.txt && cd transformers && python setup.py install && cd .. && python -u pretrain_mbart.py -n 1  -nr 0 -g 1  --model_path=res/pretrain_@@lang@@/12.19 --use_official_pretrained --pretrained_model=[#input-previous-model-path] --tokenizer_name_or_path=[#input-previous-model-path] --langs=en,@@lang@@ --mono_src=[#input-training-data-path]/xglue.ntg.en.src.train,[#input-training-data-path]/xglue.ntg.@@lang@@.src.train --shard_files --lr=1e-5 --batch_size=1024 --no_reload_optimizer_ctr_and_scheduler"
+
+
+# SPM_TRAIN big_corpus parameters
+spm_train --input=my_input --model_prefix=en_clean_unigram --vocab_size=32000 --character_coverage=1.0 --model_type=unigram --num_threads=40 --input_sentence_size=5000000 --shuffle_input_sentence=true
+
+
+

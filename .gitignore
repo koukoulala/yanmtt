@@ -2,6 +2,9 @@ res/
 backup/
 ckpts/
 .idea/
+tokenizers/
+models/
+data/
 
 *pt
 *.model
