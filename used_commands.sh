@@ -22,5 +22,9 @@ nohup python -u generate_mbart.py -n 1  -nr 0 -g 1 --model_path examples/models/
 # SPM_TRAIN big_corpus parameters
 spm_train --input=my_input --model_prefix=en_clean_unigram --vocab_size=32000 --character_coverage=1.0 --model_type=unigram --num_threads=40 --input_sentence_size=5000000 --shuffle_input_sentence=true
 
+# 4.8
+python create_autoconfig.py ./tokenizers/mbart-25 mbart ./data/sample.all .
+python create_autoconfig.py ./tokenizers/mbart-vienhi16k mbart ./data/sample.all .
+
 
 

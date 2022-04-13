@@ -44,7 +44,7 @@ num_added_toks = tokenizer.add_special_tokens(special_tokens_dict)
 
 tokenizer.save_pretrained(sys.argv[1])
 
-os.rename(sys.argv[1]+"/tokenizer_config.json",sys.argv[1]+"/config.json")
+os.rename(sys.argv[1]+"/tokenizer_config.json", sys.argv[1]+"/config.json")
 
 config = AutoConfig.from_pretrained(sys.argv[1])
 config.save_pretrained(sys.argv[1])
@@ -55,6 +55,11 @@ tokenizer = AutoTokenizer.from_pretrained(sys.argv[1], do_lower_case=False, use_
 
 print(tokenizer)
 
-print(tokenizer.convert_ids_to_tokens(tokenizer("This is a dummy sentence. Depending on the languages you chose for segmentation, this may or may not look weirdly segmented to you.", add_special_tokens=False).input_ids))
+with open("data/sample.all", "r", encoding="utf-8") as f:
+    lines = f.readlines()
+    for i, line in enumerate(lines):
+        print(i, tokenizer.convert_ids_to_tokens(tokenizer(line, add_special_tokens=False).input_ids))
+
+# print(tokenizer.convert_ids_to_tokens(tokenizer("This is a dummy sentence. Depending on the languages you chose for segmentation, this may or may not look weirdly segmented to you.", add_special_tokens=False).input_ids))
     
 print("Success")
