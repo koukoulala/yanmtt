@@ -338,7 +338,7 @@ def shard_files_mono(files, args):
         infile = open(files[lang][0]).readlines() if args.num_domains_for_domain_classifier > 1 else open(files[lang]).readlines()
         num_lines = len(infile)
         lines_per_shard = math.ceil(num_lines/args.world_size)
-        print("For language:",lang," the total number of lines are:", num_lines, "and number of lines per shard are:", lines_per_shard)
+        print("For language:", lang," the total number of lines are:", num_lines, "and number of lines per shard are:", lines_per_shard)
         for shard_id in range(args.world_size):
             outfile = open(files[lang][0]+"."+"%02d" % shard_id, "w") if args.num_domains_for_domain_classifier > 1 else open(files[lang]+"."+"%02d" % shard_id, "w")
             for line in infile[shard_id*lines_per_shard:(shard_id+1)*lines_per_shard]:
@@ -519,8 +519,14 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
                 sentence = next(language_file_dict[language]).strip()
             if args.num_domains_for_domain_classifier > 1: ## Careful when handling domains for monolingual corpora.
                 lang = language.strip().split("-")[0]
+                if args.no_lang_identifier:
+                    lang = "all"
+                    print("Changing lang to: ", lang)
                 lang = lang if args.use_official_pretrained else "<2"+lang+">"
             else:
+                if args.no_lang_identifier:
+                    language = "all"
+                    print("Changing language to: ", language)
                 lang = language if args.use_official_pretrained else "<2"+language+">"
             if type(mp_val_or_range) is float:
                 mask_percent = mp_val_or_range
@@ -714,7 +720,11 @@ def generate_batches_lm(tok, args, rank, files): ## Address compatibilities of t
             if not has_rem:
                 language_idx = random.choices(language_indices, probs)[0]
                 sentence = next(language_file_dict[language_list[language_idx]]).strip()
-                lang = "<2"+language_list[language_idx]+">"
+                tmp_lang = language_list[language_idx]
+                if args.no_lang_identifier:
+                    tmp_lang = "all"
+                    print("Changing generate_batches_lm tmp_lang to: ", tmp_lang)
+                lang = "<2"+tmp_lang+">"
                 sentence_split = sentence.split(" ")
                 sent_len = len(sentence_split)
                 if sent_len < 10: ## Extremely short docs.
@@ -808,7 +818,13 @@ def generate_batches_eval_bilingual(tok, args, file, slang):
         slang = slang.split("-")
         slang_parent = slang[0]
         slang = slang[1]
+        if args.no_lang_identifier:
+            slang_parent = "all"
+            print("Changing generate_batches_eval_bilingual slang_parent to: ", slang_parent)
         lang_parent = slang_parent if args.use_official_pretrained else "<2"+slang_parent+">"
+    if args.no_lang_identifier:
+        slang = "all"
+        print("Changing generate_batches_eval_bilingual slang to: ", slang)
     lang = slang if args.use_official_pretrained else "<2"+slang+">"
     for src_line in src_file:
         start = time.time()
@@ -992,6 +1008,9 @@ def generate_batches_bilingual(tok, args, files, rank):
                 src_sent = src_sent.strip()
                 tgt_sent = tgt_sent.strip()
             slangtlang = language.strip().split("-")
+            if args.no_lang_identifier:
+                slangtlang = ["all" for i in slangtlang]
+                print("Changing generate_batches_bilingual slangtlang to: ", slangtlang)
             if args.cross_distillation or args.multi_source: ## In this case only we provide a hyphen separated triplet to represent languages X, Y and Z.
                 slang_parent = slangtlang[0] if args.use_official_pretrained else "<2"+slangtlang[0]+">"
                 slang = slangtlang[1] if args.use_official_pretrained else "<2"+slangtlang[1]+">"
@@ -1249,8 +1268,12 @@ def generate_batches_pair(tok, args): ## TODO: Fix for mbart and bart variants
         src_sent = src_sent.strip()
         tgt_sent = tgt_sent.strip()
         start = time.time()
-        slang = args.slang if args.use_official_pretrained else "<2"+args.slang+">"
-        tlang = args.tlang if args.use_official_pretrained else "<2"+args.tlang+">"
+        tmp_slang, tmp_tlang = args.slang, args.tlang
+        if args.no_lang_identifier:
+            tmp_slang, tmp_tlang = "all", "all"
+            print("Changing generate_batches_pair slang, tlang to: ", tmp_slang, tmp_tlang)
+        slang = tmp_slang if args.use_official_pretrained else "<2"+tmp_slang+">"
+        tlang = tmp_tlang if args.use_official_pretrained else "<2"+tmp_tlang+">"
         src_sent_split = src_sent.split(" ")
         tgt_sent_split = tgt_sent.split(" ")
         tgt_sent_len = len(tgt_sent_split)
@@ -1328,8 +1351,12 @@ def generate_batches_pair_masked(tok, args): ## TODO: Implement hard truncation 
         src_sent = src_sent.strip()
         tgt_sent = tgt_sent.strip()
         start = time.time()
-        slang = args.slang if args.use_official_pretrained else "<2"+args.slang+">"
-        tlang = args.tlang if args.use_official_pretrained else "<2"+args.tlang+">"
+        tmp_slang, tmp_tlang = args.slang, args.tlang
+        if args.no_lang_identifier:
+            tmp_slang, tmp_tlang = "all", "all"
+            print("Changing generate_batches_pair_masked slang, tlang to: ", tmp_slang, tmp_tlang)
+        slang = tmp_slang if args.use_official_pretrained else "<2"+tmp_slang+">"
+        tlang = tmp_tlang if args.use_official_pretrained else "<2"+tmp_tlang+">"
         src_sent_split = src_sent.split(" ")
         tgt_sent_split = tgt_sent.split(" ")
         tgt_sent_len = len(tgt_sent_split)
@@ -1393,7 +1420,14 @@ def generate_batches_for_decoding(tok, args):
         slang = slang.split("-")
         slang_parent = slang[0]
         slang = slang[1]
+        if args.no_lang_identifier:
+            slang_parent = "all"
+            print("Changing generate_batches_for_decoding slang_parent to: ", slang_parent)
         lang_parent = slang_parent if args.use_official_pretrained else "<2"+slang_parent+">"
+
+    if args.no_lang_identifier:
+        slang = "all"
+        print("Changing generate_batches_for_decoding slang to: ", slang)
     lang = slang if args.use_official_pretrained else "<2"+slang+">"
     
     if len(args.token_masking_probs_range) == 1:
@@ -1529,6 +1563,9 @@ def generate_batches_for_decoding_lm(tok, args):
     """Generates the source sentences for the test set."""
     src_file = open(args.test_src)
     lang = args.lang
+    if args.no_lang_identifier:
+        lang = "all"
+        print("Changing generate_batches_for_decoding_lm lang to: ", lang)
     lang = lang if args.use_official_pretrained else "<2"+lang+">"
     
     for line in src_file:

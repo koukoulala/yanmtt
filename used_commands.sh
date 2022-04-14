@@ -30,3 +30,7 @@ python create_autoconfig.py ./tokenizers/mbart-vienhi16k mbart ./data/sample.all
 python create_autoconfig_mBART.py data/sampled_data/combined_data.EN,data/sampled_data/combined_data.DE,data/sampled_data/combined_data.ZH 16000 tokenizers/mbart-test mbart "<2all>" 1000000 1
 python create_autoconfig_mBART.py ../MultilingualAdsGeneration/data/pre_train_data/combined_data 64000 tokenizers/mbart-ads mbart "<2all>" 1000000 1
 
+# 4.14
+export CUDA_VISIBLE_DEVICES=0,1
+nohup python -u pretrain_mBART.py -n 1  -nr 0 -g 2  --model_path res/try_mbart_model --tokenizer_name_or_path ./tokenizers/mbart-test --mono_src ./data/sample_data --encoder_layers 2 --decoder_layers 2 --encoder_attention_heads=4 --decoder_attention_heads=4 --encoder_ffn_dim=258 --decoder_ffn_dim=258 --d_model=128 --shard_files
+
