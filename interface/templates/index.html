@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <title>YANMTT-NMT</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous" />
+        <!-- <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}"> -->
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" />
+        <link rel="canonical" href="https://getbootstrap.com/docs/4.1/examples/sticky-footer/" />
+        <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='semantic.css') }}" />
+        <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='custom.css') }}" />
+        
+        <script src="https://code.jquery.com/jquery-3.3.1.js" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js" integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut" crossorigin="anonymous"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/js/bootstrap.min.js" integrity="sha384-B0UglyR+jN6CkvvICOB2joaf5I4l3gm9GU6Hc1og6Ls7i6U/mkkaduKaBhlAXv9k" crossorigin="anonymous"></script>
+        <script src="{{ url_for('static', filename='semantic.js') }}"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/5.7.0/d3.min.js"></script>
+        <script src="{{ url_for('static', filename='langid-model-full.js') }}"></script>
+        <script src="{{ url_for('static', filename='langid.js') }}"></script>
+        <script>
+            $(document).on('click','#yesLang',function(){
+                $("#lang0").html('');
+                $("#lang0").hide();
+                return false;
+            });
+            $(document).on('click','#noLang',function(){
+                $('input[class=sourcelang]').val("").change();
+                $("#lang0").html('Select a source language on your own, stop bothering me! I was just trying to help!');
+                setTimeout(function() { 
+                    $('#lang0').fadeOut();
+                }, 2000);
+                return false;
+            });
+            $(document).ready(function() {
+                langs_dictionary={ 
+                    "af": "Afrikaans", "am": "Amharic", "ar": "Arabic", "az": "Azerbaijani", "be": "Belarusian", "bg": "Bulgarian", "bn": "Bengali", "br": "Breton", "bs": "Bosnian", "ca": "Valencian", "cs": "Czech", "cy": "Welsh", "da": "Danish", "de": "German", "el": "Greeek", "en": "English", "es": "Spanish", "et": "Estonian", "fa": "Persian", "fi": "Finnish", "fr": "French", "ga": "Irish", "gl": "Galician", "gu": "Gujarati", "he": "Hebrew", "hi": "Hindi", "hr": "Croatian", "ht": "Haitian Creole", "hu": "Hungarian", "hy": "Armenian", "id": "Indonesian", "is": "Icelandic", "it": "Italian", "ja": "Japanese", "jv": "Javanese", "ka": "Georgian", "kk": "Kazakh", "km": "Central Khmer", "kn": "Kannada", "ko": "Korean", "lb": "Letzeburgesch", "lo": "Lao", "lt": "Lithuanian", "lv": "Latvian", "mg": "Malagasy", "mk": "Macedonian", "ml": "Malayalam", "mn": "Mongolian", "mr": "Marathi", "ms": "Malay", "ne": "Nepali", "nl": "Flemish", "no": "Norwegian", "oc": "Occitan", "or": "Oriya", "pa": "Punjabi", "pl": "Polish", "ps": "Pashto", "pt": "Portuguese", "ro": "Moldovan", "ru": "Russian", "si": "Sinhalese", "sk": "Slovak", "sl": "Slovenian", "sq": "Albanian", "sr": "Serbian", "sv": "Swedish", "sw": "Swahili", "ta": "Tamil", "th": "Thai", "tl": "Tagalog", "tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "vi": "Vietnamese", "xh": "Xhosa", "zh": "Chinese", "zu": "Zulu"
+                };
+                $("#textareasource").keyup(displayType);
+            
+                function displayType(){
+                    var contents = $("#textareasource").val();
+                        if (contents.length == 0) {
+                            $("#detLangText").hide();
+                            $("#lang0").hide();
+                        }
+                        else{
+                            var rank = langid.rank(contents);
+                            for (var i=0;i<1;i++){
+                                $("#lang0").html("Source Language: " + langs_dictionary[rank[i]["lang"]] + "?  " + "<button id='yesLang' class='btn btn-sm btn-primary' type='button' >Yes</button>&nbsp;&nbsp;&nbsp;" + "<button id='noLang' class='btn btn-sm btn-danger' type='button' >No</button>");
+                                $('input[class=sourcelang]').val(langs_dictionary[rank[i]["lang"]]).change();
+                            }
+                            if (contents != "The digital age, also referred to as the information society, is characterized by ever-growing volumes of information.")
+                            {
+                                $("#detLangText").show();
+                                $("#lang0").show();
+                            }
+                        }
+                    }
+            });
+            $(document).ready(function(){
+                $('.ui.dropdown')
+                .dropdown();
+            });
+
+            $(document).ready(function(){
+                // var hf_models = ['facebook/m2m100_418M', 'facebook/m2m100_1.2B']
+                $.ajax({
+                    url: "{{ url_for('request_api.models') }}",
+                    type: 'GET',
+                    dataType: 'json',
+                    success: function(data){
+                        var models = data['models'];
+                        // models = models.concat(hf_models);
+                        for( var i = 0; i< models.length; i++){
+                                $('#models').append("<div class='item'>"+ models[i] + "</div>");
+                        }
+                    },
+                    error:function(){
+                        console.log('error');
+                    }
+                });
+            });
+
+            $(document).ready(function(){
+                sentence_dict = {
+                    // "afrikaans": "Ek is 'n machine en ek probeer om te vertaal.", "amharic": "እኔ አንድ ማሽን ነው እና እኔ መተግበሪያ ይፈልጋሉ.", "arabic": "أنا آلة وأحاول الترجمة.", "asturian": "Ye una maquinaria y trate de traducir.", "azerbaijani": "Mən bir makineyəm və çevirmək istəyirəm.", "bashkir": "Яны машинаһы, яны переводим, яны перевод.", "belarusian": "Я працую на тэлебачанні і працую на тэлебачанні.", "bulgarian": "Аз съм машина и се опитвам да превеждам.", "bengali": "আমি একটি মেশিন এবং আমি অনুবাদ করার চেষ্টা করি।", "breton": "Ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma", "bosnian": "Ja sam stroj i pokušavam prevesti.", "valencian": "Sóc una màquina i intento traduir-la.", "cebuano": "Ako mao ang usa ka machine ug ako nagpasok sa translation.", "czech": "Jsem stroj a snažím se přeložit.", "welsh": "Mae'n cael eu cwsmeriaid a mae'n cael eu cwsmeriaid.", "danish": "Jeg er en maskin og jeg forsøger at oversætte.", "german": "Ich bin eine Maschine und versuche zu übersetzen.", "greeek": "Είμαι μηχανή και προσπαθώ να μεταφράσω.", "english": "I am a machine and I try to translate.", "spanish": "Soy una máquina y trato de traducir.", "estonian": "Ma olen masin ja püüan tõlkida.", "persian": "من یک ماشین هستم و سعی می کنم ترجمه کنم.", "fulah": "«I am a machine and I try to translate. »", "finnish": "Olen kone ja yritän kääntää.", "french": "Je suis une machine et j’essaie de traduire.", "irish": "Brazzers físeán catagóir Inexperienced, Déagóir Inexperienced, Déagóir Inexperienced", "scottish gaelic": "Tha mi a dèanamh, tha mi a dèanamh.", "galician": "Eu son unha máquina e trato de traducir.", "gujarati": "I'm a machine, I'm a machine, I'm a machine, I'm a machine, I'm a machine.", "hausa": "Yana da wani masana'antu da kuma za a iya sauke.", "hebrew": "אני מכונה ואני מנסה לתרגם.", "hindi": "मैं एक मशीन हूँ और मैं अनुवाद करने की कोशिश कर रहा हूँ।", "croatian": "Ja sam stroj i pokušavam prevesti.", "haitian creole": "Mwen se yon machin ak mwen eksperyans nan tradiksyon.", "hungarian": "Én gép vagyok, és megpróbálom lefordítani.", "armenian": "Ես մեքենա եմ եւ փորձում եմ արտասանել.", "indonesian": "Saya adalah mesin dan saya mencoba menerjemahkan.", "igbo": "M bụ a machine na m na-eji na-atụnye.", "iloko": "Maanadantayo dagiti kabaketan a pagsasaotayo.", "icelandic": "Ég er vél og reyni að þýða.", "italian": "Io sono una macchina e sto cercando di tradurre.", "japanese": "私は機械で、翻訳しようとしている。", "javanese": "Aku minangka mesin lan aku njupuk diterjemahake.", "georgian": "მე მობილური ვარ და მობილური მობილური ვიყავი.", "kazakh": "«Менің машинасы бар, менің қоңызы бар.", "central khmer": "ខ្ញុំជាម៉ាស៊ីននិងខ្ញុំកំពុងស្វែងរកការបណ្តាញ។", "kannada": "ಕಲಬುರಗಿ ಸ 11:ಬರುವ ವರ್ಷದ ಅಕ್ಟೋಬರ್ 2 ರೊಳಗೆ ದೇಶವನ್ನು ಬಯಲು ಶೌಚ ಮುಕ್ತ ರಾಷ್ಟ್ರವನ್ನಾಗಿ ಘೋಷಿಸುವ ಉದ್ದೇಶವನ್ನು ಕೇಂದ್ರ.", "korean": "나는 기계이고 나는 번역을 시도한다.", "letzeburgesch": "Mir sinn eng Maschinn an mir versuchen ze übersetzen.", "ganda": "Mako Mako Mako Mako Mako", "lingala": "Moko Moko Moko Moko Moko Moko Moko", "lao": "ພວກເຮົາມີເຄື່ອງມືແລະພວກເຮົາມີການທົດສອບ.", "lithuanian": "Aš esu mašina ir stengiuosi išversti.", "latvian": "Es esmu mašīna un mēģinu tulkot.", "malagasy": "Izaho no fitaovana ary nanandratra aho.", "macedonian": "Јас сум машина и се обидувам да го преведам.", "malayalam": "ഞാൻ ഒരു മെഷീൻ ആണ്, ഞാൻ翻译 ചെയ്യുന്നു.", "mongolian": "Би машин юм, би түүнчлэн түүнчлэн түүнчлэн түүнчлэн хэлж байна.", "marathi": "मी मशीन आहे आणि मी अनुवाद करण्यास प्रयत्न करतो.", "malay": "Saya seorang penyanyi dan saya cuba menerjemahkan.", "burmese": "I am a machine နှင့်ကျွန်တော်တို့ကိုပြန်လည်သုံးသပ်ပါတယ်.", "nepali": "म जहाँ पुगे पनि, जहाँ रहे पनि सर्लाही मेरो मनमा रहिरहनेछ ।", "flemish": "Ik ben een machine en probeer te vertalen.", "norwegian": "Jeg er en maskin og prøver å oversette.", "northern sotho": "Moka moka moka moka moka", "occitan": "Es un òme e me'n pòdi traduire.", "oriya": "କିନ୍ତୁ ସେ କହିଲେ yemiti huye 1st 1st.", "punjabi": "ਮੈਨੂੰ ਇੱਕ ਮਸ਼ੀਨ ਹੈ ਅਤੇ ਮੈਨੂੰ ਤਜਰਬੇ ਕਰਨ ਲਈ ਚਾਹੁੰਦੇ ਹਨ.", "polish": "Jestem maszyną i staram się tłumaczyć.", "pashto": "زه د ماشين دی او زه د ترجمه کولو لپاره هڅه وکړم.", "portuguese": "Sou uma máquina e estou tentando traduzir.", "moldovan": "Sunt o mașină și încerc să traduc.", "russian": "Я машина и стараюсь переводить.", "sindhi": "آءٌ آئرلندي آھيان ۽ آءٌ ترجمو ڪرڻ جي ڪوشش ڪريان ٿو.", "sinhalese": "මම පරිගණකයක්, මම පරිගණකයක්.", "slovak": "Som stroj a snažím sa prekladať.", "slovenian": "Jaz sem stroj in poskušam prevesti.", "somali": "Waxaan waa mashiinka iyo waxaan ka mid ka mid ka mid ka mid.", "albanian": "Unë jam një makinë dhe përpiqem të përkthehem.", "serbian": "Ја сам машина и покушавам да преведем.", "swati": "Ngena ngemvume nge-intanethi", "sundanese": "Kuring mangrupakeun mesin jeung aku coba ngabalukarkeun.", "swedish": "Jag är en maskin och jag försöker översätta.", "swahili": "Mimi ni mtumiaji na nataka kutafsiri.", "tamil": "I am a machine நான் மொழிபெயர்க்க முயற்சிக்கிறேன்", "thai": "ฉันเป็นเครื่องและพยายามแปล", "tagalog": "I'm a machine and I'm trying to translate.", "tswana": "O nama, o nama, o nama, o nama.", "turkish": "Ben bir makineyim ve tercüme etmeye çalışıyorum.", "ukrainian": "Я машинка, і я намагаюся перекласти.", "urdu": "میں ایک مشین ہوں اور میں ترجمہ کرنے کی کوشش کرتا ہوں.", "uzbek": "Bir makina ko‘yim, tulgan ko‘yim.", "vietnamese": "Tôi là một máy móc và tôi cố gắng dịch.", "wolof": "Ma bi bi bi bi bi bi bi bi bi bi bi bi", "xhosa": "Ngaba umatshini kwaye nceda ukuba nceda.", "yiddish": "עס איז עס, און א מעשה מעשה.", "yoruba": "Mo ti wa ni a ẹrọ ati ki o ba tẹsiwaju.", "chinese": "我是一台机器,我试着翻译。", "zulu": "Ngaba umatshini, ngaba usayizi."
+                    "Afrikaans": "Ek is 'n machine en ek prober om te vertaal.", "Amharic": "እኔ አንድ ማሽን ነው እና እኔ መተግበሪያ ይፈልጋሉ.", "Arabic": "أنا آلة وأحاول الترجمة.", "Asturian": "Ye una maquinaria y trate de traducir.", "Azerbaijani": "Mən bir makineyəm və çevirmək istəyirəm.", "Bashkir": "Яны машинаһы, яны переводим, яны перевод.", "Belarusian": "Я працую на тэлебачанні і працую на тэлебачанні.", "Bulgarian": "Аз съм машина и се опитвам да превеждам.", "Bengali": "আমি একটি মেশিন এবং আমি অনুবাদ করার চেষ্টা করি।", "Breton": "Ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma' e ma", "Bosnian": "Ja sam stroj i pokušavam prevesti.", "Valencian": "Sóc una màquina i intento traduir-la.", "Cebuano": "Ako mao ang usa ka machine ug ako nagpasok sa translation.", "Czech": "Jsem stroj a snažím se přeložit.", "Welsh": "Mae'n cael eu cwsmeriaid a mae'n cael eu cwsmeriaid.", "Danish": "Jeg er en maskin og jeg forsøger at oversætte.", "German": "Ich bin eine Maschine und versuche zu übersetzen.", "Greeek": "Είμαι μηχανή και προσπαθώ να μεταφράσω.", "English": "The digital age, also referred to as the information society, is characterized by ever-growing volumes of information.", "Spanish": "Soy una máquina y trato de traducir.", "Estonian": "Ma olen masin ja püüan tõlkida.", "Persian": "من یک ماشین هستم و سعی می کنم ترجمه کنم.", "Fulah": "«I am a machine and I try to translate. »", "Finnish": "Olen kone ja yritän kääntää.", "French": "Je suis une machine et j’essaie de traduire.", "Irish": "Brazzers físeán catagóir Inexperienced, Déagóir Inexperienced, Déagóir Inexperienced", "Scottish Gaelic": "Tha mi a dèanamh, tha mi a dèanamh.", "Galician": "Eu son unha máquina e trato de traducir.", "Gujarati": "I'm a machine, I'm a machine, I'm a machine, I'm a machine, I'm a machine.", "Hausa": "Yana da wani masana'antu da kuma za a iya sauke.", "Hebrew": "אני מכונה ואני מנסה לתרגם.", "Hindi": "मैं एक मशीन हूँ और मैं अनुवाद करने की कोशिश कर रहा हूँ।", "Croatian": "Ja sam stroj i pokušavam prevesti.", "Haitian Creole": "Mwen se yon machin ak mwen eksperyans nan tradiksyon.", "Hungarian": "Én gép vagyok, és megpróbálom lefordítani.", "Armenian": "Ես մեքենա եմ եւ փորձում եմ արտասանել.", "Indonesian": "Saya adalah mesin dan saya mencoba menerjemahkan.", "Igbo": "M bụ a machine na m na-eji na-atụnye.", "Iloko": "Maanadantayo dagiti kabaketan a pagsasaotayo.", "Icelandic": "Ég er vél og reyni að þýða.", "Italian": "Io sono una macchina e sto cercando di tradurre.", "Japanese": "私は機械で、翻訳しようとしている。", "Javanese": "Aku minangka mesin lan aku njupuk diterjemahake.", "Georgian": "მე მობილური ვარ და მობილური მობილური ვიყავი.", "Kazakh": "«Менің машинасы бар, менің қоңызы бар.", "Central Khmer": "ខ្ញុំជាម៉ាស៊ីននិងខ្ញុំកំពុងស្វែងរកការបណ្តាញ។", "Kannada": "ಕಲಬುರಗಿ ಸ 11:ಬರುವ ವರ್ಷದ ಅಕ್ಟೋಬರ್ 2 ರೊಳಗೆ ದೇಶವನ್ನು ಬಯಲು ಶೌಚ ಮುಕ್ತ ರಾಷ್ಟ್ರವನ್ನಾಗಿ ಘೋಷಿಸುವ ಉದ್ದೇಶವನ್ನು ಕೇಂದ್ರ.", "Korean": "나는 기계이고 나는 번역을 시도한다.", "Letzeburgesch": "Mir sinn eng Maschinn an mir versuchen ze übersetzen.", "Ganda": "Mako Mako Mako Mako Mako", "Lingala": "Moko Moko Moko Moko Moko Moko Moko", "Lao": "ພວກເຮົາມີເຄື່ອງມືແລະພວກເຮົາມີການທົດສອບ.", "Lithuanian": "Aš esu mašina ir stengiuosi išversti.", "Latvian": "Es esmu mašīna un mēģinu tulkot.", "Malagasy": "Izaho no fitaovana ary nanandratra aho.", "Macedonian": "Јас сум машина и се обидувам да го преведам.", "Malayalam": "ഞാൻ ഒരു മെഷീൻ ആണ്, ഞാൻ翻译 ചെയ്യുന്നു.", "Mongolian": "Би машин юм, би түүнчлэн түүнчлэн түүнчлэн түүнчлэн хэлж байна.", "Marathi": "मी मशीन आहे आणि मी अनुवाद करण्यास प्रयत्न करतो.", "Malay": "Saya seorang penyanyi dan saya cuba menerjemahkan.", "Burmese": "I am a machine နှင့်ကျွန်တော်တို့ကိုပြန်လည်သုံးသပ်ပါတယ်.", "Nepali": "म जहाँ पुगे पनि, जहाँ रहे पनि सर्लाही मेरो मनमा रहिरहनेछ ।", "Flemish": "Ik ben een machine en probeer te vertalen.", "Norwegian": "Jeg er en maskin og prøver å oversette.", "Northern Sotho": "Moka moka moka moka moka", "Occitan": "Es un òme e me'n pòdi traduire.", "Oriya": "କିନ୍ତୁ ସେ କହିଲେ yemiti huye 1st 1st.", "Punjabi": "ਮੈਨੂੰ ਇੱਕ ਮਸ਼ੀਨ ਹੈ ਅਤੇ ਮੈਨੂੰ ਤਜਰਬੇ ਕਰਨ ਲਈ ਚਾਹੁੰਦੇ ਹਨ.", "Polish": "Jestem maszyną i staram się tłumaczyć.", "Pashto": "زه د ماشين دی او زه د ترجمه کولو لپاره هڅه وکړم.", "Portuguese": "Sou uma máquina e estou tentando traduzir.", "Moldovan": "Sunt o mașină și încerc să traduc.", "Russian": "Я машина и стараюсь переводить.", "Sindhi": "آءٌ آئرلندي آھيان ۽ آءٌ ترجمو ڪرڻ جي ڪوشش ڪريان ٿو.", "Sinhalese": "මම පරිගණකයක්, මම පරිගණකයක්.", "Slovak": "Som stroj a snažím sa prekladať.", "Slovenian": "Jaz sem stroj in poskušam prevesti.", "Somali": "Waxaan waa mashiinka iyo waxaan ka mid ka mid ka mid ka mid.", "Albanian": "Unë jam një makinë dhe përpiqem të përkthehem.", "Serbian": "Ја сам машина и покушавам да преведем.", "Swati": "Ngena ngemvume nge-intanethi", "Sundanese": "Kuring mangrupakeun mesin jeung aku coba ngabalukarkeun.", "Swedish": "Jag är en maskin och jag försöker översätta.", "Swahili": "Mimi ni mtumiaji na nataka kutafsiri.", "Tamil": "I am a machine நான் மொழிபெயர்க்க முயற்சிக்கிறேன்", "Thai": "ฉันเป็นเครื่องและพยายามแปล", "Tagalog": "I'm a machine and I'm trying to translate.", "Tswana": "O nama, o nama, o nama, o nama.", "Turkish": "Ben bir makineyim ve tercüme etmeye çalışıyorum.", "Ukrainian": "Я машинка, і я намагаюся перекласти.", "Urdu": "میں ایک مشین ہوں اور میں ترجمہ کرنے کی کوشش کرتا ہوں.", "Uzbek": "Bir makina ko‘yim, tulgan ko‘yim.", "Vietnamese": "Tôi là một máy móc và tôi cố gắng dịch.", "Wolof": "Ma bi bi bi bi bi bi bi bi bi bi bi bi", "Xhosa": "Ngaba umatshini kwaye nceda ukuba nceda.", "Yiddish": "עס איז עס, און א מעשה מעשה.", "Yoruba": "Mo ti wa ni a ẹrọ ati ki o ba tẹsiwaju.", "Chinese": "我是一台机器,我试着翻译。", "Zulu": "Ngaba umatshini, ngaba usayizi."
+                }
+                lang_realcasing = {
+                    'afrikaans': 'Afrikaans', 'amharic': 'Amharic', 'arabic': 'Arabic', 'asturian': 'Asturian', 'azerbaijani': 'Azerbaijani', 'bashkir': 'Bashkir', 'belarusian': 'Belarusian', 'bulgarian': 'Bulgarian', 'bengali': 'Bengali', 'breton': 'Breton', 'bosnian': 'Bosnian', 'valencian': 'Valencian', 'cebuano': 'Cebuano', 'czech': 'Czech', 'welsh': 'Welsh', 'danish': 'Danish', 'german': 'German', 'greeek': 'Greeek', 'english': 'English', 'spanish': 'Spanish', 'estonian': 'Estonian', 'persian': 'Persian', 'fulah': 'Fulah', 'finnish': 'Finnish', 'french': 'French', 'irish': 'Irish', 'scottish gaelic': 'Scottish Gaelic', 'galician': 'Galician', 'gujarati': 'Gujarati', 'hausa': 'Hausa', 'hebrew': 'Hebrew', 'hindi': 'Hindi', 'croatian': 'Croatian', 'haitian creole': 'Haitian Creole', 'hungarian': 'Hungarian', 'armenian': 'Armenian', 'indonesian': 'Indonesian', 'igbo': 'Igbo', 'iloko': 'Iloko', 'icelandic': 'Icelandic', 'italian': 'Italian', 'japanese': 'Japanese', 'javanese': 'Javanese', 'georgian': 'Georgian', 'kazakh': 'Kazakh', 'central khmer': 'Central Khmer', 'kannada': 'Kannada', 'korean': 'Korean', 'letzeburgesch': 'Letzeburgesch', 'ganda': 'Ganda', 'lingala': 'Lingala', 'lao': 'Lao', 'lithuanian': 'Lithuanian', 'latvian': 'Latvian', 'malagasy': 'Malagasy', 'macedonian': 'Macedonian', 'malayalam': 'Malayalam', 'mongolian': 'Mongolian', 'marathi': 'Marathi', 'malay': 'Malay', 'burmese': 'Burmese', 'nepali': 'Nepali', 'flemish': 'Flemish', 'norwegian': 'Norwegian', 'northern sotho': 'Northern Sotho', 'occitan': 'Occitan', 'oriya': 'Oriya', 'punjabi': 'Punjabi', 'polish': 'Polish', 'pashto': 'Pashto', 'portuguese': 'Portuguese', 'moldovan': 'Moldovan', 'russian': 'Russian', 'sindhi': 'Sindhi', 'sinhalese': 'Sinhalese', 'slovak': 'Slovak', 'slovenian': 'Slovenian', 'somali': 'Somali', 'albanian': 'Albanian', 'serbian': 'Serbian', 'swati': 'Swati', 'sundanese': 'Sundanese', 'swedish': 'Swedish', 'swahili': 'Swahili', 'tamil': 'Tamil', 'thai': 'Thai', 'tagalog': 'Tagalog', 'tswana': 'Tswana', 'turkish': 'Turkish', 'ukrainian': 'Ukrainian', 'urdu': 'Urdu', 'uzbek': 'Uzbek', 'vietnamese': 'Vietnamese', 'wolof': 'Wolof', 'xhosa': 'Xhosa', 'yiddish': 'Yiddish', 'yoruba': 'Yoruba', 'chinese': 'Chinese', 'zulu': 'Zulu'
+                }
+                $("#copybutton").click(function(){
+                    if($('input[class=sourcelang]').val() == ""){
+                        $("#sourceAlert").show()
+                        return false;
+                    }
+                    langValLower = $('input[class=sourcelang]').val();
+                    langVal = lang_realcasing[langValLower];
+                    var textContent = sentence_dict[langVal]
+                    $("#textareasource").val(textContent);
+                    // $('input[class=sourcelang]').val(langVal).change();
+                });
+            });
+
+            $(document).ready(function(){
+                $("#clearbutton").click(function(){
+                    $("#textareasource").val('');
+                });
+            });
+            function copy(selector){
+                var $temp = $("<div>");
+                $("#textsample").append($temp);
+                $temp.attr("contenteditable", true)
+                    .html($(selector).html()).select()
+                    .on("focus", function() { document.execCommand('selectAll',false,null); })
+                    .focus();
+                document.execCommand("copy");
+                $temp.remove();
+            }
+
+            $(document).on('change','#modeldomain',function(){
+                var model = $('input[class=modeldomain]').val();
+                $("#modelLoadAlert").show();
+                $.ajax({
+                        url: "{{ url_for('request_api.load_model') }}",
+                        type: "POST",
+                        data: {
+                            "model_name": model
+                        },
+                        success: function(data){
+                            if (data["message"] == "success"){
+                                // console.log(data);
+
+                                if("sourceLangDict" in data && "targetLangDict" in data){
+                                    var lang = data['sourceLangDict'];
+                                    // console.log(lang)
+                                    var divs = '';
+                                    for (let k in lang) {
+                                        // console.log('source ' + k + ' is ' + lang[k])
+                                        divs = divs + "<div class='item' data-id='"+lang[k]+"'>"+k+"</div>"
+                                    }
+                                    $('#sourcel').html(divs);
+                                    var lang = data['targetLangDict'];
+                                    // console.log(lang)
+                                    var divs = '';
+                                    for (let k in lang) {
+                                        // console.log('target ' + k + ' is ' + lang[k])
+                                        divs = divs + "<div class='item' data-id='"+lang[k]+"'>"+k+"</div>"
+                                    }
+                                    $('#targetl').html(divs);
+                                }
+                                else{
+                                    var divs = '<div class="item" data-id="af">Afrikaans</div><div class="item" data-id="sq">Albanian</div><div class="item" data-id="am">Amharic</div><div class="item" data-id="ar">Arabic</div><div class="item" data-id="hy">Armenian</div><div class="item" data-id="ast">Asturian</div><div class="item" data-id="az">Azerbaijani</div><div class="item" data-id="ba">Bashkir</div><div class="item" data-id="be">Belarusian</div><div class="item" data-id="bg">Bulgarian</div><div class="item" data-id="bn">Bengali</div><div class="item" data-id="br">Breton</div><div class="item" data-id="bs">Bosnian</div><div class="item" data-id="ceb">Cebuano</div><div class="item" data-id="zh">Chinese</div><div class="item" data-id="cs">Czech</div><div class="item" data-id="da">Danish</div><div class="item" data-id="en">English</div><div class="item" data-id="et">Estonian</div><div class="item" data-id="fi">Finnish</div><div class="item" data-id="nl">Flemish</div><div class="item" data-id="fr">French</div><div class="item" data-id="ff">Fulah</div><div class="item" data-id="de">German</div><div class="item" data-id="el">Greeek</div><div class="item" data-id="fa">Persian</div><div class="item" data-id="ga">Irish</div><div class="item" data-id="gd">Scottish Gaelic</div><div class="item" data-id="gl">Galician</div><div class="item" data-id="lg">Ganda</div><div class="item" data-id="gu">Gujarati</div><div class="item" data-id="ha">Hausa</div><div class="item" data-id="he">Hebrew</div><div class="item" data-id="hi">Hindi</div><div class="item" data-id="hr">Croatian</div><div class="item" data-id="ht">Haitian Creole</div><div class="item" data-id="hu">Hungarian</div><div class="item" data-id="id">Indonesian</div><div class="item" data-id="ig">Igbo</div><div class="item" data-id="ilo">Iloko</div><div class="item" data-id="is">Icelandic</div><div class="item" data-id="it">Italian</div><div class="item" data-id="ja">Japanese</div><div class="item" data-id="jv">Javanese</div><div class="item" data-id="ka">Georgian</div><div class="item" data-id="kk">Kazakh</div><div class="item" data-id="km">Central Khmer</div><div class="item" data-id="kn">Kannada</div><div class="item" data-id="ko">Korean</div><div class="item" data-id="lb">Letzeburgesch</div><div class="item" data-id="ln">Lingala</div><div class="item" data-id="lo">Lao</div><div class="item" data-id="lt">Lithuanian</div><div class="item" data-id="lv">Latvian</div><div class="item" data-id="mk">Macedonian</div><div class="item" data-id="mg">Malagasy</div><div class="item" data-id="ml">Malayalam</div><div class="item" data-id="mr">Marathi</div><div class="item" data-id="mn">Mongolian</div><div class="item" data-id="ro">Moldovan</div><div class="item" data-id="ms">Malay</div><div class="item" data-id="my">Burmese</div><div class="item" data-id="ne">Nepali</div><div class="item" data-id="no">Norwegian</div><div class="item" data-id="ns">Northern Sotho</div><div class="item" data-id="oc">Occitan</div><div class="item" data-id="or">Oriya</div><div class="item" data-id="pa">Punjabi</div><div class="item" data-id="pl">Polish</div><div class="item" data-id="ps">Pashto</div><div class="item" data-id="pt">Portuguese</div><div class="item" data-id="ru">Russian</div><div class="item" data-id="sr">Serbian</div><div class="item" data-id="sd">Sindhi</div><div class="item" data-id="si">Sinhalese</div><div class="item" data-id="sk">Slovak</div><div class="item" data-id="sl">Slovenian</div><div class="item" data-id="so">Somali</div><div class="item" data-id="es">Spanish</div><div class="item" data-id="ss">Swati</div><div class="item" data-id="su">Sundanese</div><div class="item" data-id="sv">Swedish</div><div class="item" data-id="sw">Swahili</div><div class="item" data-id="ta">Tamil</div><div class="item" data-id="th">Thai</div><div class="item" data-id="tl">Tagalog</div><div class="item" data-id="tn">Tswana</div><div class="item" data-id="tr">Turkish</div><div class="item" data-id="uk">Ukrainian</div><div class="item" data-id="ur">Urdu</div><div class="item" data-id="uz">Uzbek</div><div class="item" data-id="ca">Valencian</div><div class="item" data-id="vi">Vietnamese</div><div class="item" data-id="cy">Welsh</div><div class="item" data-id="wo">Wolof</div><div class="item" data-id="xh">Xhosa</div><div class="item" data-id="yi">Yiddish</div><div class="item" data-id="yo">Yoruba</div><div class="item" data-id="zu">Zulu</div>';
+                                    $('#sourcel').html(divs);
+                                    $('#targetl').html(divs);
+                                }
+                                $("#modelLoadAlert").hide();
+                                $("#modelLoadSuccess").show();
+                                setTimeout(function() {
+                                    $("#modelLoadSuccess").fadeOut();
+                                }, 2000);
+                                if (model == "facebook/mbart-large-50" || model == "facebook/mbart-large-cc25" || model == "ai4bharat/indicbartss" || model == "ai4bharat/indicbart"){
+                                    // translate button text change
+                                    $("#translate").html("<i class='fa fa-clipboard'></i> &nbsp; [MASK] Sentence and Predict");
+                                }
+                                else{
+                                    $("#translate").html("<i class='fa fa-database'></i> &nbsp;&nbsp;Translate");
+                                }
+                            } 
+                            else{
+                                $("#modelLoadAlert").hide();
+                                $("#modelLoadFailed").show();
+                            }
+                        }
+                });
+            });
+
+            $(function(){
+				$("#translate").click(function(){
+
+                    $("#sourceAlert").hide()
+                    $("#targetAlert").hide()
+                    $("#rawTextAlert").hide()
+                    $("#copyTransButton").hide()
+                    $("#attText").hide();
+                    $("#attinfo").html("");
+                    $("#attinfo").hide();
+
+                    if($('input[class=sourcelang]').val() == ""){
+                        $("#sourceAlert").show()
+                        return false;
+                    }
+                    if($('input[class=targetlang]').val() == ""){
+                        $("#targetAlert").show()
+                        return false;
+                    }
+                    if($("#textareasource").val() == ""){
+                        $("#rawTextAlert").show()
+                        return false;
+                    }
+                    var requestData = {
+                        "sourcelang": $('input[class=sourcelang]').val(),
+                        "targetlang": $('input[class=targetlang]').val(),
+                        "rawtext": $("#textareasource").val(),
+                        "model_name": $('input[class=modeldomain]').val()
+                    }
+                    $("#originalText").html(requestData['rawtext']);
+                    $("#translatedText").html("Translating...");
+                    $.ajax({
+                        url: "{{ url_for('request_api.translate') }}",
+                        type: "POST",
+                        data: requestData,
+                        success: function(data){
+                            $("#outputBox").show();
+                            $("#originalText").html(data.raw_text);
+                            console.log(data.translated_text)
+                            $("#translatedText").html(data.translated_text);
+                            $("#copyTransButton").show()
+                            $("#visualizeButton").show()
+                            // $("#attinfo").html(data.vishtml);
+                            // renderattentions(data.pyparams);
+                        }
+                    });
+				});
+			});
+            $(document).ready(function() {
+                $('#myFile').change(function(evt) {
+                    // if($('input[class=sourcelang]').val() == ""){
+                    //     $("#sourceAlert").show()
+                    //     return false;
+                    // }
+                    // if($('input[class=targetlang]').val() == ""){
+                    //     $("#targetAlert").show()
+                    //     return false;
+                    // }
+                    // if($("#textareasource").val() == ""){
+                    //     $("#rawTextAlert").show()
+                    //     return false;
+                    // }
+                    var requestData = new FormData($('#mainForm')[0])
+                    // {
+                    //     "sourcelang": $('input[class=sourcelang]').val(),
+                    //     "targetlang": $('input[class=targetlang]').val(),
+                    //     "formdata": ,
+                    //     "model_name": $('input[class=modeldomain]').val()
+                    // }
+                    $.ajax({
+                        url: "{{ url_for('request_api.upload_and_visualize') }}",
+                        type: "POST",
+                        data: requestData,
+                        cache: false,
+                        contentType: false,
+                        processData: false,
+                        success: function(data){
+                            $("#embed").attr('src', "http://localhost:26004/#projector");
+                            // $("#embed").;
+                            // $("#outputBox").show();
+                            // $("#originalText").html(data.raw_text);
+                            // $("#translatedText").html(data.translated_text);
+                            // $("#copyTransButton").show()
+                            // $("#visualizeButton").show()
+                            // $("#attinfo").html(data.vishtml);
+                            // renderattentions(data.pyparams);
+                        }
+                    });
+                });
+            });
+            $(function(){
+				$("#upload").click(function(){
+
+                    $("#sourceAlert").hide()
+                    $("#targetAlert").hide()
+                    $("#rawTextAlert").hide()
+                    $("#copyTransButton").hide()
+                    $("#attinfo").html("");
+                    $("#attinfo").hide();
+                    $("#myFile").click();
+				});
+			});
+            $(function(){
+				$("#visualizeButton").click(function(){
+
+                    var requestData = {
+                        "sourcelang": $('input[class=sourcelang]').val(),
+                        "targetlang": $('input[class=targetlang]').val(),
+                        "rawtext": $("#originalText").html(),
+                        "model_name": $('input[class=modeldomain]').val()
+                    }
+                    $("#attText").show();
+                    $("#attinfo").show();
+                    $("#attinfo").html("Visualizing...");
+                    $.ajax({
+                        url: "{{ url_for('request_api.visualize') }}",
+                        type: "POST",
+                        data: requestData,
+                        success: function(data){
+                            $("#attinfo").html(data.vishtml);
+                            renderattentions(data.pyparams);
+                        }
+                    });
+				});
+			});
+            function renderattentions(PYTHON_PARAMS){
+                const params = PYTHON_PARAMS; // HACK: PYTHON_PARAMS is a template marker that is replaced by actual params.
+                const config = {};
+
+                const MIN_X = 0;
+                const MIN_Y = 0;
+                const DIV_WIDTH = 970;
+                const THUMBNAIL_PADDING = 5;
+                const DETAIL_WIDTH = 300;
+                const DETAIL_ATTENTION_WIDTH = 140;
+                const DETAIL_BOX_WIDTH = 80;
+                const DETAIL_BOX_HEIGHT = 18;
+                const DETAIL_PADDING = 15;
+                const ATTN_PADDING = 0;
+                const DETAIL_HEADING_HEIGHT = 25;
+                const HEADING_TEXT_SIZE = 15;
+                const HEADING_PADDING = 5;
+                const TEXT_SIZE = 13;
+                const TEXT_PADDING = 5;
+                const LAYER_COLORS = d3.schemeCategory10;
+                const PALETTE = {
+                    'light': {
+                        'text': 'black',
+                        'background': 'white',
+                        'highlight': '#F5F5F5'
+                    },
+                    'dark': {
+                        'text': '#ccc',
+                        'background': 'black',
+                        'highlight': '#222'
+                    }
+                }
+
+                function render() {
+
+                    // Set global state variables
+
+                    var attData = config.attention[config.filter];
+                    config.leftText = attData.left_text;
+                    config.rightText = attData.right_text;
+                    config.attn = attData.attn;
+                    config.numLayers = config.attn.length;
+                    config.numHeads = config.attn[0].length;
+                    config.thumbnailBoxHeight = 7 * (12 / config.totalHeads);
+                    const axisSize = HEADING_TEXT_SIZE + HEADING_PADDING + TEXT_SIZE + TEXT_PADDING;
+                    config.thumbnailHeight = Math.max(config.leftText.length, config.rightText.length) * config.thumbnailBoxHeight + 2 * THUMBNAIL_PADDING;
+                    config.thumbnailWidth = (DIV_WIDTH - axisSize) / config.totalHeads;
+                    config.detailHeight = Math.max(config.leftText.length, config.rightText.length) * DETAIL_BOX_HEIGHT + 2 * DETAIL_PADDING + DETAIL_HEADING_HEIGHT;
+                    config.divHeight = Math.max(config.numLayers * config.thumbnailHeight + axisSize, config.detailHeight);
+
+                    const vis = $(`#${config.rootDivId} #vis`)
+                    vis.empty();
+                    vis.attr("height", config.divHeight);
+                    config.svg = d3.select(`#${config.rootDivId} #vis`)
+                        .append('svg')
+                        .attr("width", DIV_WIDTH)
+                        .attr("height", config.divHeight)
+                        .attr("fill", getBackgroundColor());
+
+                    renderAxisLabels();
+
+                    var i;
+                    var j;
+                    for (i = 0; i < config.numLayers; i++) {
+                        for (j = 0; j < config.numHeads; j++) {
+                            renderThumbnail(i, j);
+                        }
+                    }
+                }
+
+                function renderAxisLabels() {
+                    const axisSize = HEADING_TEXT_SIZE + HEADING_PADDING + TEXT_SIZE + TEXT_PADDING;
+                    const tableWidth = config.thumbnailWidth * config.heads.length;
+                    config.svg.append("text")
+                        .text("Heads")
+                        .attr("fill", "black")
+                        .attr("font-weight", "bold")
+                        .attr("font-size", HEADING_TEXT_SIZE + "px")
+                        .attr("x", axisSize + tableWidth / 2)
+                        .attr("text-anchor", "middle")
+                        .attr("y", 0)
+                        .attr("dy", HEADING_TEXT_SIZE);
+                    for (let i = 0; i < config.numHeads; i++) {
+                        config.svg.append("text")
+                            .text(config.heads[i])
+                            .attr("fill", "black")
+                            .attr("font-size", TEXT_SIZE + "px")
+                            .attr("x", axisSize + (i + .5) * config.thumbnailWidth)
+                            .attr("text-anchor", "middle")
+                            .attr("y", HEADING_TEXT_SIZE + HEADING_PADDING)
+                            .attr("dy", TEXT_SIZE);
+                    }
+                    let x = 0;
+                    let y = axisSize + config.thumbnailHeight * config.layers.length / 2;
+                    console.log("x", x, y)
+                    config.svg.append("text")
+                        .text("Layers")
+                        .attr("fill", "black")
+                        .attr("font-weight", "bold")
+                        .attr("transform", "rotate(270, " + x  + ", " + y + ")")
+                        .attr("font-size", HEADING_TEXT_SIZE + "px")
+                        .attr("x", x)
+                        .attr("text-anchor", "middle")
+                        .attr("y", y)
+                        .attr("dy", HEADING_TEXT_SIZE);
+                    for (let i = 0; i < config.numLayers; i++) {
+                        x = HEADING_TEXT_SIZE + HEADING_PADDING + TEXT_SIZE; // HACK
+                        y = axisSize + (i + .5) * config.thumbnailHeight;
+                        config.svg.append("text")
+                            .text(config.layers[i])
+                            .attr("fill", "black")
+                            .attr("font-size", TEXT_SIZE + "px")
+                            .attr("x", x)
+                            .attr("text-anchor", "end")
+                            .attr("y", y)
+                            .attr("dy", TEXT_SIZE / 2);
+                    }
+                }
+
+
+                function renderThumbnail(layerIndex, headIndex) {
+                    const axisSize = HEADING_TEXT_SIZE + HEADING_PADDING + TEXT_SIZE + TEXT_PADDING
+                    const x = headIndex * config.thumbnailWidth + axisSize;
+                    const y = layerIndex * config.thumbnailHeight + axisSize;
+                    renderThumbnailAttn(x, y, config.attn[layerIndex][headIndex], layerIndex, headIndex);
+                }
+
+                function renderDetail(att, layerIndex, headIndex) {
+                    const axisSize = TEXT_SIZE + HEADING_PADDING + TEXT_SIZE + TEXT_PADDING;
+                    var xOffset = .8 * config.thumbnailWidth;
+                    var maxX = DIV_WIDTH;
+                    var maxY = config.divHeight - 3;
+                    var leftPos = axisSize + headIndex * config.thumbnailWidth;
+                    var x = leftPos + THUMBNAIL_PADDING + xOffset;
+                    if (x < MIN_X) {
+                        x = MIN_X;
+                    } else if (x + DETAIL_WIDTH > maxX) {
+                        x = leftPos + THUMBNAIL_PADDING - DETAIL_WIDTH + 8;
+                    }
+                    var posLeftText = x;
+                    var posAttention = posLeftText + DETAIL_BOX_WIDTH;
+                    var posRightText = posAttention + DETAIL_ATTENTION_WIDTH;
+                    var thumbnailHeight = Math.max(config.leftText.length, config.rightText.length) * config.thumbnailBoxHeight + 2 * THUMBNAIL_PADDING;
+                    var yOffset = 20;
+                    var y = layerIndex * thumbnailHeight + THUMBNAIL_PADDING + yOffset;
+                    if (y < MIN_Y) {
+                        y = MIN_Y;
+                    } else if (y + config.detailHeight > maxY) {
+                        y = maxY - config.detailHeight;
+                    }
+                    renderDetailFrame(x, y, layerIndex);
+                    y = y + DETAIL_PADDING;
+                    renderDetailHeading(x, y, layerIndex, headIndex);
+                    y = y + DETAIL_HEADING_HEIGHT;
+                    renderDetailText(config.leftText, "leftText", posLeftText, y , layerIndex);
+                    renderDetailAttn(posAttention, y, att, layerIndex, headIndex);
+                    renderDetailText(config.rightText, "rightText", posRightText, y, layerIndex);
+                }
+
+                function renderDetailHeading(x, y, layerIndex, headIndex) {
+                    var fillColor = getTextColor();
+                    config.svg.append("text")
+                        .classed("detail", true)
+                        .text('Layer ' + config.layers[layerIndex] + ", Head " + config.heads[headIndex])
+                        .attr("font-size", TEXT_SIZE + "px")
+                        .attr("font-weight", "bold")
+                        .style("cursor", "default")
+                        .style("-webkit-user-select", "none")
+                        .attr("fill", fillColor)
+                        .attr("x", x + DETAIL_WIDTH / 2)
+                        .attr("text-anchor", "middle")
+                        .attr("y", y)
+                        .attr("height", DETAIL_HEADING_HEIGHT)
+                        .attr("width", DETAIL_WIDTH)
+                        .attr("dy", HEADING_TEXT_SIZE);
+                }
+
+                function renderDetailText(text, id, x, y, layerIndex) {
+                    var tokenContainer = config.svg.append("svg:g")
+                        .classed("detail", true)
+                        .selectAll("g")
+                        .data(text)
+                        .enter()
+                        .append("g");
+
+                    var fillColor = getTextColor();
+
+                    tokenContainer.append("rect")
+                        .classed("highlight", true)
+                        .attr("fill", fillColor)
+                        .style("opacity", 0.0)
+                        .attr("height", DETAIL_BOX_HEIGHT)
+                        .attr("width", DETAIL_BOX_WIDTH)
+                        .attr("x", x)
+                        .attr("y", function (d, i) {
+                            return y + i * DETAIL_BOX_HEIGHT;
+                        });
+
+                    var textContainer = tokenContainer.append("text")
+                        .classed("token", true)
+                        .text(function (d) {
+                            return d;
+                        })
+                        .attr("font-size", TEXT_SIZE + "px")
+                        .style("cursor", "default")
+                        .style("-webkit-user-select", "none")
+                        .attr("fill", fillColor)
+                        .attr("x", x)
+                        .attr("y", function (d, i) {
+                            return i * DETAIL_BOX_HEIGHT + y;
+                        })
+                        .attr("height", DETAIL_BOX_HEIGHT)
+                        .attr("width", DETAIL_BOX_WIDTH)
+                        .attr("dy", TEXT_SIZE);
+
+                    if (id == "leftText") {
+                        textContainer.style("text-anchor", "end")
+                            .attr("dx", DETAIL_BOX_WIDTH - 2);
+                        tokenContainer.on("mouseover", function (d, index) {
+                            highlightSelection(index);
+                        });
+                        tokenContainer.on("mouseleave", function () {
+                            unhighlightSelection();
+                        });
+                    }
+                }
+
+                function highlightSelection(index) {
+                    config.svg.select("#leftText")
+                        .selectAll(".highlight")
+                        .style("opacity", function (d, i) {
+                            return i == index ? 1.0 : 0.0;
+                        });
+                    config.svg.selectAll(".attn-line-group")
+                        .style("opacity", function (d, i) {
+                            return i == index ? 1.0 : 0.0;
+                        });
+                }
+
+                function unhighlightSelection() {
+                    config.svg.select("#leftText")
+                        .selectAll(".highlight")
+                        .style("opacity", 0.0);
+                    config.svg.selectAll(".attn-line-group")
+                        .style("opacity", 1);
+                }
+
+                function renderThumbnailAttn(x, y, att, layerIndex, headIndex) {
+
+                    var attnContainer = config.svg.append("svg:g");
+
+                    var attnBackground = attnContainer.append("rect")
+                        .attr("id", 'attn_background_' + layerIndex + "_" + headIndex)
+                        .classed("attn_background", true)
+                        .attr("x", x)
+                        .attr("y", y)
+                        .attr("height", config.thumbnailHeight)
+                        .attr("width", config.thumbnailWidth)
+                        .attr("stroke-width", 2)
+                        .attr("stroke", getLayerColor(layerIndex))
+                        .attr("stroke-opacity", 0)
+                        .attr("fill", getBackgroundColor());
+                    var x1 = x + THUMBNAIL_PADDING;
+                    var x2 = x1 + config.thumbnailWidth - 14;
+                    var y1 = y + THUMBNAIL_PADDING;
+
+                    attnContainer.selectAll("g")
+                        .data(att)
+                        .enter()
+                        .append("g") // Add group for each source token
+                        .attr("source-index", function (d, i) { // Save index of source token
+                            return i;
+                        })
+                        .selectAll("line")
+                        .data(function (d) { // Loop over all target tokens
+                            return d;
+                        })
+                        .enter() // When entering
+                        .append("line")
+                        .attr("x1", x1)
+                        .attr("y1", function (d) {
+                            var sourceIndex = +this.parentNode.getAttribute("source-index");
+                            return y1 + (sourceIndex + .5) * config.thumbnailBoxHeight;
+                        })
+                        .attr("x2", x2)
+                        .attr("y2", function (d, targetIndex) {
+                            return y1 + (targetIndex + .5) * config.thumbnailBoxHeight;
+                        })
+                        .attr("stroke-width", 2.2)
+                        .attr("stroke", getLayerColor(layerIndex))
+                        .attr("stroke-opacity", function (d) {
+                            return d;
+                        });
+
+                    var clickRegion = attnContainer.append("rect")
+                        .attr("x", x)
+                        .attr("y", y)
+                        .attr("height", config.thumbnailHeight)
+                        .attr("width", config.thumbnailWidth)
+                        .style("opacity", 0);
+
+                    clickRegion.on("click", function (d, index) {
+                        var attnBackgroundOther = config.svg.selectAll(".attn_background");
+                        attnBackgroundOther.attr("fill", getBackgroundColor());
+                        attnBackgroundOther.attr("stroke-opacity", 0);
+
+                        config.svg.selectAll(".detail").remove();
+                        if (config.detail_layer != layerIndex || config.detail_head != headIndex) {
+                            renderDetail(att, layerIndex, headIndex);
+                            config.detail_layer = layerIndex;
+                            config.detail_head = headIndex;
+                            attnBackground.attr("fill", getHighlightColor());
+                            attnBackground.attr("stroke-opacity", .8);
+                        } else {
+                            config.detail_layer = null;
+                            config.detail_head = null;
+                            attnBackground.attr("fill", getBackgroundColor());
+                            attnBackground.attr("stroke-opacity", 0);
+                        }
+                    });
+
+                    clickRegion.on("mouseover", function (d) {
+                        d3.select(this).style("cursor", "pointer");
+                    });
+                }
+
+                function renderDetailFrame(x, y, layerIndex) {
+                    var detailFrame = config.svg.append("rect")
+                        .classed("detail", true)
+                        .attr("x", x)
+                        .attr("y", y)
+                        .attr("height", config.detailHeight)
+                        .attr("width", DETAIL_WIDTH)
+                        .style("opacity", 1)
+                        .attr("stroke-width", 1.5)
+                        .attr("stroke-opacity", 0.7)
+                        .attr("stroke", getLayerColor(layerIndex));
+                }
+
+                function renderDetailAttn(x, y, att, layerIndex) {
+                    var attnContainer = config.svg.append("svg:g")
+                        .classed("detail", true)
+                        .attr("pointer-events", "none");
+                    attnContainer.selectAll("g")
+                        .data(att)
+                        .enter()
+                        .append("g") // Add group for each source token
+                        .classed('attn-line-group', true)
+                        .attr("source-index", function (d, i) { // Save index of source token
+                            return i;
+                        })
+                        .selectAll("line")
+                        .data(function (d) { // Loop over all target tokens
+                            return d;
+                        })
+                        .enter()
+                        .append("line")
+                        .attr("x1", x + ATTN_PADDING)
+                        .attr("y1", function (d) {
+                            var sourceIndex = +this.parentNode.getAttribute("source-index");
+                            return y + (sourceIndex + .5) * DETAIL_BOX_HEIGHT;
+                        })
+                        .attr("x2", x + DETAIL_ATTENTION_WIDTH - ATTN_PADDING)
+                        .attr("y2", function (d, targetIndex) {
+                            return y + (targetIndex + .5) * DETAIL_BOX_HEIGHT;
+                        })
+                        .attr("stroke-width", 2.2)
+                        .attr("stroke", getLayerColor(layerIndex))
+                        .attr("stroke-opacity", function (d) {
+                            return d;
+                        });
+                }
+
+                function getLayerColor(layer) {
+                    return LAYER_COLORS[config.layers[layer] % 10];
+                }
+
+                function getTextColor() {
+                    return PALETTE[config.mode]['text']
+                }
+
+                function getBackgroundColor() {
+                    return PALETTE[config.mode]['background']
+                }
+
+                function getHighlightColor() {
+                    return PALETTE[config.mode]['highlight']
+                }
+
+                function initialize() {
+                    // alert(params["attention"]);
+                    config.attention = params['attention'];
+                    config.filter = params['default_filter'];
+                    config.mode = params['display_mode'];
+                    config.layers = params['include_layers']
+                    config.heads = params['include_heads']
+                    config.totalHeads = params['total_heads']
+                    config.rootDivId = params['root_div_id'];
+                    $(`#${config.rootDivId} #filter`).on('change', function (e) {
+                        config.filter = e.currentTarget.value;
+                        render();
+                    });
+                }
+                initialize();
+                render();
+            }
+        </script>
+        
+    </head>
+    <body>
+        <nav class="navbar navbar-expand-md navbar-dark fixed-top bg-dark">
+            <a class="navbar-brand" href="/"><font size="+1">&nbsp;&nbsp;&nbsp;&nbsp;Yet Another Neural Machine Translation Toolkit (YANMTT) :: Neural Machine Translation Web Application</a>
+
+            <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarsExampleDefault" aria-controls="navbarsExampleDefault" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+        </nav>
+        <br /><br /><br /><br />
+        <div class="container">
+            <form method="POST" action="" id="mainForm" enctype="multipart/form-data">
+				<!-- <p id="textsample">A sample sentence: The digital age, also referred to as the information society, is characterized by ever-growing volumes of information.</p> -->
+                <br />
+                <div class="container ui stackable equal width grid">
+                    <div class="ui fluid alert alert-warning column" style="display: none" id="sourceAlert"> 
+                        <a class="close" onclick="$('#sourceAlert').hide()">×</a>  
+                        Please specify the <strong>Source Language</strong>.  
+                    </div>
+                    <div class="ui fluid alert alert-warning column" style="display: none" id="targetAlert"> 
+                        <a class="close" onclick="$('#targetAlert').hide()">×</a>  
+                        Please specify the <strong>Target Language</strong>.  
+                    </div>
+                    <div class="ui fluid alert alert-warning column" style="display: none" id="rawTextAlert"> 
+                        <a class="close" onclick="$('#rawTextAlert').hide()">×</a>  
+                        Please enter <strong>the text</strong> to be translated.
+                    </div>
+                    <div class="ui fluid alert alert-warning column" style="display: none" id="modelLoadAlert"> 
+                        <a class="close" onclick="$('#modelLoadAlert').hide()">×</a>  
+                        Model is loading. Please wait...  
+                    </div>
+                    <div class="ui fluid alert alert-success column" style="display: none" id="modelLoadSuccess"> 
+                        <a class="close" onclick="$('#modelLoadSuccess').hide()">×</a>  
+                        Model loaded successfully.
+                    </div>
+                    <div class="ui fluid alert alert-danger column" style="display: none" id="modelLoadFailed"> 
+                        <a class="close" onclick="$('#modelLoadFailed').hide()">×</a>  
+                        Model failed to load. 
+                    </div>
+                </div>
+                <hr><br/>
+                <div class="form-group">    
+                    <div class="container ui stackable equal width grid">
+                        <div class="ui fluid search dropdown button column">
+                            <input type="hidden" id="modeldomain" name="modeldomain" class="modeldomain">
+                            <span class="text"><i class="cloud icon"></i> Model / Domain</span>
+                            <div class="menu" id="models">
+                                <!-- <div class="item disabled">Facebook M2M</div> -->
+                            </div>
+                        </div>
+                        <div class="ui fluid search dropdown button column">
+                            <input type="hidden" id="sourcelang" name="sourcelang" class="sourcelang">
+                            <span class="text"><i class="world icon"></i> Source Language</span>
+                            <div class="menu" id="sourcel">
+                                <div class="item" data-id="af">Afrikaans</div><div class="item" data-id="sq">Albanian</div><div class="item" data-id="am">Amharic</div><div class="item" data-id="ar">Arabic</div><div class="item" data-id="hy">Armenian</div><div class="item" data-id="ast">Asturian</div><div class="item" data-id="az">Azerbaijani</div><div class="item" data-id="ba">Bashkir</div><div class="item" data-id="be">Belarusian</div><div class="item" data-id="bg">Bulgarian</div><div class="item" data-id="bn">Bengali</div><div class="item" data-id="br">Breton</div><div class="item" data-id="bs">Bosnian</div><div class="item" data-id="ceb">Cebuano</div><div class="item" data-id="zh">Chinese</div><div class="item" data-id="cs">Czech</div><div class="item" data-id="da">Danish</div><div class="item" data-id="en">English</div><div class="item" data-id="et">Estonian</div><div class="item" data-id="fi">Finnish</div><div class="item" data-id="nl">Flemish</div><div class="item" data-id="fr">French</div><div class="item" data-id="ff">Fulah</div><div class="item" data-id="de">German</div><div class="item" data-id="el">Greeek</div><div class="item" data-id="fa">Persian</div><div class="item" data-id="ga">Irish</div><div class="item" data-id="gd">Scottish Gaelic</div><div class="item" data-id="gl">Galician</div><div class="item" data-id="lg">Ganda</div><div class="item" data-id="gu">Gujarati</div><div class="item" data-id="ha">Hausa</div><div class="item" data-id="he">Hebrew</div><div class="item" data-id="hi">Hindi</div><div class="item" data-id="hr">Croatian</div><div class="item" data-id="ht">Haitian Creole</div><div class="item" data-id="hu">Hungarian</div><div class="item" data-id="id">Indonesian</div><div class="item" data-id="ig">Igbo</div><div class="item" data-id="ilo">Iloko</div><div class="item" data-id="is">Icelandic</div><div class="item" data-id="it">Italian</div><div class="item" data-id="ja">Japanese</div><div class="item" data-id="jv">Javanese</div><div class="item" data-id="ka">Georgian</div><div class="item" data-id="kk">Kazakh</div><div class="item" data-id="km">Central Khmer</div><div class="item" data-id="kn">Kannada</div><div class="item" data-id="ko">Korean</div><div class="item" data-id="lb">Letzeburgesch</div><div class="item" data-id="ln">Lingala</div><div class="item" data-id="lo">Lao</div><div class="item" data-id="lt">Lithuanian</div><div class="item" data-id="lv">Latvian</div><div class="item" data-id="mk">Macedonian</div><div class="item" data-id="mg">Malagasy</div><div class="item" data-id="ml">Malayalam</div><div class="item" data-id="mr">Marathi</div><div class="item" data-id="mn">Mongolian</div><div class="item" data-id="ro">Moldovan</div><div class="item" data-id="ms">Malay</div><div class="item" data-id="my">Burmese</div><div class="item" data-id="ne">Nepali</div><div class="item" data-id="no">Norwegian</div><div class="item" data-id="ns">Northern Sotho</div><div class="item" data-id="oc">Occitan</div><div class="item" data-id="or">Oriya</div><div class="item" data-id="pa">Punjabi</div><div class="item" data-id="pl">Polish</div><div class="item" data-id="ps">Pashto</div><div class="item" data-id="pt">Portuguese</div><div class="item" data-id="ru">Russian</div><div class="item" data-id="sr">Serbian</div><div class="item" data-id="sd">Sindhi</div><div class="item" data-id="si">Sinhalese</div><div class="item" data-id="sk">Slovak</div><div class="item" data-id="sl">Slovenian</div><div class="item" data-id="so">Somali</div><div class="item" data-id="es">Spanish</div><div class="item" data-id="ss">Swati</div><div class="item" data-id="su">Sundanese</div><div class="item" data-id="sv">Swedish</div><div class="item" data-id="sw">Swahili</div><div class="item" data-id="ta">Tamil</div><div class="item" data-id="th">Thai</div><div class="item" data-id="tl">Tagalog</div><div class="item" data-id="tn">Tswana</div><div class="item" data-id="tr">Turkish</div><div class="item" data-id="uk">Ukrainian</div><div class="item" data-id="ur">Urdu</div><div class="item" data-id="uz">Uzbek</div><div class="item" data-id="ca">Valencian</div><div class="item" data-id="vi">Vietnamese</div><div class="item" data-id="cy">Welsh</div><div class="item" data-id="wo">Wolof</div><div class="item" data-id="xh">Xhosa</div><div class="item" data-id="yi">Yiddish</div><div class="item" data-id="yo">Yoruba</div><div class="item" data-id="zu">Zulu</div>
+                            </div>
+                        </div>
+                        <div class="ui fluid search dropdown button column">
+                            <input type="hidden" id="targetlang" name="targetlang" class="targetlang">
+                            <span class="text"><i class="world icon"></i> Target Language</span>
+                            <div class="menu" id="targetl">
+                                <div class="item" data-id="af">Afrikaans</div><div class="item" data-id="sq">Albanian</div><div class="item" data-id="am">Amharic</div><div class="item" data-id="ar">Arabic</div><div class="item" data-id="hy">Armenian</div><div class="item" data-id="ast">Asturian</div><div class="item" data-id="az">Azerbaijani</div><div class="item" data-id="ba">Bashkir</div><div class="item" data-id="be">Belarusian</div><div class="item" data-id="bg">Bulgarian</div><div class="item" data-id="bn">Bengali</div><div class="item" data-id="br">Breton</div><div class="item" data-id="bs">Bosnian</div><div class="item" data-id="ceb">Cebuano</div><div class="item" data-id="zh">Chinese</div><div class="item" data-id="cs">Czech</div><div class="item" data-id="da">Danish</div><div class="item" data-id="en">English</div><div class="item" data-id="et">Estonian</div><div class="item" data-id="fi">Finnish</div><div class="item" data-id="nl">Flemish</div><div class="item" data-id="fr">French</div><div class="item" data-id="ff">Fulah</div><div class="item" data-id="de">German</div><div class="item" data-id="el">Greeek</div><div class="item" data-id="fa">Persian</div><div class="item" data-id="ga">Irish</div><div class="item" data-id="gd">Scottish Gaelic</div><div class="item" data-id="gl">Galician</div><div class="item" data-id="lg">Ganda</div><div class="item" data-id="gu">Gujarati</div><div class="item" data-id="ha">Hausa</div><div class="item" data-id="he">Hebrew</div><div class="item" data-id="hi">Hindi</div><div class="item" data-id="hr">Croatian</div><div class="item" data-id="ht">Haitian Creole</div><div class="item" data-id="hu">Hungarian</div><div class="item" data-id="id">Indonesian</div><div class="item" data-id="ig">Igbo</div><div class="item" data-id="ilo">Iloko</div><div class="item" data-id="is">Icelandic</div><div class="item" data-id="it">Italian</div><div class="item" data-id="ja">Japanese</div><div class="item" data-id="jv">Javanese</div><div class="item" data-id="ka">Georgian</div><div class="item" data-id="kk">Kazakh</div><div class="item" data-id="km">Central Khmer</div><div class="item" data-id="kn">Kannada</div><div class="item" data-id="ko">Korean</div><div class="item" data-id="lb">Letzeburgesch</div><div class="item" data-id="ln">Lingala</div><div class="item" data-id="lo">Lao</div><div class="item" data-id="lt">Lithuanian</div><div class="item" data-id="lv">Latvian</div><div class="item" data-id="mk">Macedonian</div><div class="item" data-id="mg">Malagasy</div><div class="item" data-id="ml">Malayalam</div><div class="item" data-id="mr">Marathi</div><div class="item" data-id="mn">Mongolian</div><div class="item" data-id="ro">Moldovan</div><div class="item" data-id="ms">Malay</div><div class="item" data-id="my">Burmese</div><div class="item" data-id="ne">Nepali</div><div class="item" data-id="no">Norwegian</div><div class="item" data-id="ns">Northern Sotho</div><div class="item" data-id="oc">Occitan</div><div class="item" data-id="or">Oriya</div><div class="item" data-id="pa">Punjabi</div><div class="item" data-id="pl">Polish</div><div class="item" data-id="ps">Pashto</div><div class="item" data-id="pt">Portuguese</div><div class="item" data-id="ru">Russian</div><div class="item" data-id="sr">Serbian</div><div class="item" data-id="sd">Sindhi</div><div class="item" data-id="si">Sinhalese</div><div class="item" data-id="sk">Slovak</div><div class="item" data-id="sl">Slovenian</div><div class="item" data-id="so">Somali</div><div class="item" data-id="es">Spanish</div><div class="item" data-id="ss">Swati</div><div class="item" data-id="su">Sundanese</div><div class="item" data-id="sv">Swedish</div><div class="item" data-id="sw">Swahili</div><div class="item" data-id="ta">Tamil</div><div class="item" data-id="th">Thai</div><div class="item" data-id="tl">Tagalog</div><div class="item" data-id="tn">Tswana</div><div class="item" data-id="tr">Turkish</div><div class="item" data-id="uk">Ukrainian</div><div class="item" data-id="ur">Urdu</div><div class="item" data-id="uz">Uzbek</div><div class="item" data-id="ca">Valencian</div><div class="item" data-id="vi">Vietnamese</div><div class="item" data-id="cy">Welsh</div><div class="item" data-id="wo">Wolof</div><div class="item" data-id="xh">Xhosa</div><div class="item" data-id="yi">Yiddish</div><div class="item" data-id="yo">Yoruba</div><div class="item" data-id="zu">Zulu</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+					<br />
+                    <p id="lang0" style="display: none"></p>
+                    <hr />
+                    <button id ="copybutton" type="button" class="btn btn-sm btn-info" ><i class="fa fa-clone"></i> Generate Sentence in Selected Source Langauge</button> <button id ="clearbutton" type="button" class="btn btn-sm btn-info" ><i class="fa fa-refresh"></i> Clear Text Area</button>
+                    <hr/>
+                    <textarea rows="5" cols="5" class="form-control" id="textareasource" placeholder="Enter text (preferably one sentence)" name="rawtext" required>{{ source_text }}</textarea>
+                    <br />
+                    <button id ="translate" type="button" class="btn btn-info" ><i class="fa fa-database"></i> &nbsp;&nbsp;&nbsp;Translate</button>
+                    <button id ="upload" type="button" class="btn btn-info" ><i class="fa fa-database"></i> &nbsp;&nbsp;&nbsp;Upload</button>
+                    <input type="file" id="myFile" name="filename" style="display: none">
+                </div>
+            </form>
+        </div>
+
+        <div class="container ui stackable equal width grid" style="display: none" id="outputBox">
+            <div class="column">
+                <p>Original</p>
+                <div id="originalText" class="alert alert-success" role="alert">
+                    
+                </div>
+            </div>
+            <div class="column">
+                <p>Translation</p>
+                <div id="translatedText" class="alert alert-success" role="alert">
+                </div>
+                <button class="btn btn-sm btn-info" id="copyTransButton" style="display: none" onclick="copy('#translatedText')"><i class="fa fa-clipboard"></i> Copy Translation To Clipboard</button> 
+                <button class="btn btn-sm btn-info" id="visualizeButton" style="display: none"><i class="fa fa-line-chart"></i> Visualize Attention</button>
+            </div>
+          </div>
+          <div class="container ui stackable equal width grid">
+            <div class="column">
+                 
+                <p id="attText" style="display: none">Attention Visualization</p>
+                <div id="attinfo" class="alert alert-success" role="alert" style="display: none">
+                    
+                </div>
+                    
+                </div>
+            </div>
+            <div class="container ui stackable equal width grid"></div>
+            <iframe id="embed" src="" width="100%" height="500px" frameborder="0"></iframe>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+          <div class="container">
+            <span class="text-muted">
+                V. 1.0 - Being developed by Chinmay Sawant, Diptesh Kanojia, and Raj Dabre.
+            </span>
+          </div>
+        </footer>
+    </body>
+</html>

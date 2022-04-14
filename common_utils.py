@@ -107,6 +107,36 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=None):
     loss = loss/denominator
     return loss
 
+def prune_weights(model_weight_dict, prune_ratio):
+    """Prunes the weights of the model.
+    Args:
+        model_weight_dict: The weights of the model.
+        prune_ratio: The ratio of the weights to be pruned.
+    Returns:
+        The pruned weights which will be used to initialize the model.
+        
+    Logic:
+        1. For each key in the model_weight_dict, get the weight tensor and flatten it.
+        2. Sort the weight tensor in ascending order and get the indices of the top prune_ratio*len(weight_tensor) elements.
+        3. Set the weights to zero at the indices obtained in step 2."""
+    if prune_ratio <= 0:
+        return model_weight_dict
+    
+    print("Pruning weights. Pruning percent: {}%".format(prune_ratio*100))
+    for key in model_weight_dict:
+        weight_tensor = model_weight_dict[key]
+        weight_tensor = weight_tensor.view(-1)
+        weight_tensor = weight_tensor.cpu().numpy()
+        indices = np.argsort(weight_tensor)
+        indices = indices[:int(prune_ratio*len(weight_tensor))]
+        weight_tensor[indices] = 0
+        weight_tensor = torch.from_numpy(weight_tensor)
+        print("Pruned percentage: {}%".format(torch.sum(weight_tensor == 0)/len(weight_tensor)*100))
+        weight_tensor = weight_tensor.view_as(model_weight_dict[key])
+        model_weight_dict[key] = weight_tensor
+    return model_weight_dict
+
+
 def lmap(f, x):
     """list(map(f, x)). Converts a map into a list containing (key,value) pairs."""
     return list(map(f, x))
@@ -361,17 +391,25 @@ def get_sacrebleu(refs, hyp):
     bleu = sacrebleu.corpus_bleu(hyp, refs)
     return bleu.score
 
-def yield_corpus_indefinitely_mono(corpus, lang):
+def yield_corpus_indefinitely_mono(corpus, lang, sorted_batching):
     """This shuffles the corpus or corpus shard at the beginning of each epoch and returns sentences indefinitely."""
     epoch_counter = 0
+    num_lines = len(corpus)
+    num_sentences_before_sort = 20000
+    num_sorted_segments = (num_lines // num_sentences_before_sort) + 1
     try:
         while True:
             print("Shuffling corpus!")
             sys.stdout.flush()
             random.shuffle(corpus)
-            for src_line in corpus:
-                yield src_line
-
+            if sorted_batching:
+                for curr_segment_id in range(num_sorted_segments):
+                    curr_segment = corpus[curr_segment_id*num_sentences_before_sort:(curr_segment_id+1)*num_sentences_before_sort]
+                    for src_line in sorted(curr_segment, key=len):
+                        yield src_line
+            else:
+                for src_line in corpus:
+                    yield src_line
             epoch_counter += 1
             print("Finished epoch", epoch_counter, "for language:", lang)
     except Exception as e:
@@ -379,15 +417,24 @@ def yield_corpus_indefinitely_mono(corpus, lang):
         print("Catastrophic data gen failure")
     return None
 
-def yield_corpus_indefinitely_bi(corpus, language):
+def yield_corpus_indefinitely_bi(corpus, language, sorted_batching):
     """This shuffles the corpus at the beginning of each epoch and returns sentences indefinitely."""
     epoch_counter = 0
+    num_lines = len(corpus)
+    num_sentences_before_sort = 20000
+    num_sorted_segments = (num_lines // num_sentences_before_sort) + 1
     while True:
         print("Shuffling corpus:", language)
         random.shuffle(corpus)
-        for src_line, tgt_line in corpus:
-            yield src_line, tgt_line
-        
+        sys.stdout.flush()
+        if sorted_batching:
+            for curr_segment_id in range(num_sorted_segments):
+                curr_segment = corpus[curr_segment_id*num_sentences_before_sort:(curr_segment_id+1)*num_sentences_before_sort]
+                for src_line, tgt_line in sorted(curr_segment, key=lambda x: len(x[1])):
+                    yield src_line, tgt_line
+        else:
+            for src_line, tgt_line in corpus:
+                yield src_line, tgt_line
         epoch_counter += 1
         print("Finished epoch", epoch_counter, "for language:", language)
     return None, None ## We should never reach this point.
@@ -440,13 +487,15 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
     for l in language_list:
         file_content = open(files[l][0]+"."+"%02d" % rank).readlines() if args.num_domains_for_domain_classifier > 1 else open(files[l]+"."+"%02d" % rank).readlines()
         probs[l] = len(file_content)
-        language_file_dict[l] = yield_corpus_indefinitely_mono(file_content, l)
+        language_file_dict[l] = yield_corpus_indefinitely_mono(file_content, l, args.sorted_batching)
     probs_temp = {lang: probs[lang]/sum(probs.values()) for lang in probs}
     probs = probs_temp
     probs_temp = {lang: probs[lang]**(1.0/args.data_sampling_temperature) for lang in probs} ## Temperature sampling probabilities.
     probs = probs_temp
     probs_temp = {lang: probs[lang]/sum(probs.values()) for lang in probs}
     probs = [probs_temp[lang] for lang in language_list]
+    dropped_sentence = "" ## We will save the sentence to be dropped this batch and add it to the next batch.
+    dropped_language = "" ## We will save the language to be dropped this batch and add it to the next batch.
     while batch_count != args.num_batches:
         curr_batch_count = 0
         encoder_input_batch = []
@@ -455,17 +504,16 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
         batch_count += 1
         max_src_sent_len = 0
         max_tgt_sent_len = 0
-        prev_max_src_sent_len = 0
-        prev_max_tgt_sent_len = 0
         start = time.time()
         sents_in_batch = 0
-        dropped_sentence = "" ## We will save the sentence to be dropped this batch and add it to the next batch.
         if args.num_domains_for_domain_classifier > 1:
             domain_classifier_labels = []
         while True:
             if dropped_sentence != "":
+                language = dropped_language # Reuse the previous language
                 sentence = dropped_sentence # Reuse the previous sentence
                 dropped_sentence = ""
+                dropped_language = ""
             else:
                 language = random.choices(language_list, probs)[0]
                 sentence = next(language_file_dict[language]).strip()
@@ -501,31 +549,60 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
                         continue
                     idx_to_mask = random.randint(sent_len//2 if args.future_prediction else 0, (curr_sent_len-1)-(span_to_mask-1)) ## We mask only the remaining half of the sentence to encourage the model to learn representations that can make do without most of the future tokens.
                     if mask_tok not in sentence_split[idx_to_mask:idx_to_mask+span_to_mask] and args.document_level_sentence_delimiter not in sentence_split[idx_to_mask:idx_to_mask+span_to_mask]:
+                        actually_masked_length = len(sentence_split[idx_to_mask:idx_to_mask+span_to_mask]) ## If at the end of the sentence then we have likely masked fewer tokens.
                         sentence_split[idx_to_mask:idx_to_mask+span_to_mask] = [mask_tok]
-                        mask_count += span_to_mask # We assume that with a low probability there are mask insertions when span lengths are 0 which may cause more mask tokens than planned. I have decided not to count these insersions towards the maximum maskable limit. This means that the total number of mask tokens will be a bit higher than what it should be. 
-                        curr_sent_len -= (span_to_mask-1)
+                        mask_count += actually_masked_length # We assume that with a low probability there are mask insertions when span lengths are 0 which may cause more mask tokens than planned. I have decided not to count these insersions towards the maximum maskable limit. This means that the total number of mask tokens will be a bit higher than what it should be. 
+                        curr_sent_len -= (actually_masked_length-1)
                 except:
                     break ## If we cannot get a properly masked sentence despite all our efforts then we just give up and continue with what we have so far.
             
             masked_sentence = " ".join(sentence_split)
+            if args.span_prediction or args.span_to_sentence_prediction: ## We only predict the masked spans and not other tokens.
+                masked_sentence_split = masked_sentence.split(mask_tok)
+                final_sentence = ""
+                prev_idx = 0
+                for span in masked_sentence_split:
+                    if span.strip() != "":
+                        extracted = sentence[prev_idx:prev_idx+sentence[prev_idx:].index(span)]
+                        final_sentence += extracted + " <s> " ## Separate the predictions.
+                        prev_idx=prev_idx+len(extracted) + len(span)
+                        
+                final_sentence += sentence[prev_idx:]
+                final_sentence = final_sentence.strip()
+                if args.span_to_sentence_prediction:
+                    masked_sentence = final_sentence
+                else:
+                    sentence = final_sentence
+            
+            
             if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
                 iids = tok(masked_sentence, return_tensors="pt").input_ids
                 curr_src_sent_len = len(iids[0])
+                if curr_src_sent_len > args.hard_truncate_length:
+                    masked_sentence = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_src_sent_len = args.hard_truncate_length
                 iids = tok(sentence, return_tensors="pt").input_ids
                 curr_tgt_sent_len = len(iids[0])
+                if curr_tgt_sent_len > args.hard_truncate_length:
+                    sentence = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_tgt_sent_len = args.hard_truncate_length
             else:
                 iids = tok(lang + " " + masked_sentence + " </s>", add_special_tokens=False, return_tensors="pt").input_ids
                 curr_src_sent_len = len(iids[0])
+                if curr_src_sent_len > args.hard_truncate_length:
+                    masked_sentence = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_src_sent_len = args.hard_truncate_length
                 iids = tok("<s> " + sentence, add_special_tokens=False, return_tensors="pt").input_ids
                 curr_tgt_sent_len = len(iids[0])
+                if curr_tgt_sent_len > args.hard_truncate_length:
+                    sentence = tok.decode(iids[0][1:args.hard_truncate_length], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_tgt_sent_len = args.hard_truncate_length
             
                         
             if curr_src_sent_len > max_src_sent_len:
-                prev_max_src_sent_len = max_src_sent_len
                 max_src_sent_len = curr_src_sent_len
             
             if curr_tgt_sent_len > max_tgt_sent_len:
-                prev_max_tgt_sent_len = max_tgt_sent_len
                 max_tgt_sent_len = curr_tgt_sent_len
             
             if args.batch_size_indicates_lines: ## Batch a fixed number of sentences. We can safely add the current example because we assume that the user knows the max batch size.
@@ -533,7 +610,10 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
                     encoder_input_batch.append(masked_sentence)
                     decoder_input_batch.append(sentence)
                 else:
-                    encoder_input_batch.append(masked_sentence + " </s> " + lang)
+                    if args.use_official_pretrained and "50" in args.pretrained_model: ## mbart-50 model has a different input representation
+                        encoder_input_batch.append(lang + " " + masked_sentence + " </s>")
+                    else:
+                        encoder_input_batch.append(masked_sentence + " </s> " + lang)
                     decoder_input_batch.append(lang + " " + sentence)
                     decoder_label_batch.append(sentence + " </s>")
                     if args.tokenization_sampling:
@@ -546,15 +626,21 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
             else:
                 potential_batch_count = max(max_src_sent_len, max_tgt_sent_len)*(sents_in_batch+1) ## Note that this will be unreliable when we do stochastic subword segmentation.
                 if potential_batch_count > args.batch_size: ## We will drop this sentence for now because we may go over the limit of what the GPU can handle. It may be used in a future iteration. Note that this will be unreliable when we do stochastic subword segmentation.
-                    dropped_sentence = sentence
-                    max_src_sent_len = prev_max_src_sent_len
-                    max_tgt_sent_len = prev_max_tgt_sent_len
+                    if curr_src_sent_len > args.batch_size or curr_tgt_sent_len > args.batch_size:
+                        dropped_sentence = "" ## Dangerous sentence detected. Exterminate with extreme prejudice!
+                        dropped_language = ""
+                    else:
+                        dropped_sentence = sentence
+                        dropped_language = language
                     break
                 if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
                     encoder_input_batch.append(masked_sentence)
                     decoder_input_batch.append(sentence)
                 else:
-                    encoder_input_batch.append(masked_sentence + " </s> " + lang)
+                    if args.use_official_pretrained and "50" in args.pretrained_model: ## mbart-50 model has a different input representation
+                        encoder_input_batch.append(lang + " " + masked_sentence + " </s>")
+                    else:
+                        encoder_input_batch.append(masked_sentence + " </s> " + lang)
                     decoder_input_batch.append(lang + " " + sentence)
                     decoder_label_batch.append(sentence + " </s>")
                     if args.tokenization_sampling:
@@ -570,22 +656,22 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
             input_ids = tok(encoder_input_batch, return_tensors="pt", padding=True).input_ids
         else:
             input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-        if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-            input_ids = input_ids[:,:args.hard_truncate_length]
+        # if len(input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+        #     input_ids = input_ids[:,:args.hard_truncate_length]
         input_masks = (input_ids != tok.pad_token_id).int()
         if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit. No support for stochastic tokenizer because the roberta tokenizer which is inherited from GPT2 tokenizer does its onw weird BPE and I dont want to mess with it.
             decoder_input_ids = tok(decoder_input_batch, return_tensors="pt", padding=True).input_ids
         else:
             decoder_input_ids = tok(decoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-        if args.hard_truncate_length > 0 and len(decoder_input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-            decoder_input_ids = decoder_input_ids[:,:args.hard_truncate_length]
+        # if len(decoder_input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+        #     decoder_input_ids = decoder_input_ids[:,:args.hard_truncate_length]
         if (args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model) or args.tokenization_sampling: ## We have to be careful when using stochastic segmentation. Note again that there will be no stoachastic segmentation with the official bart model. IT JUST WONT WORK.
             labels = decoder_input_ids[:,1:]
             decoder_input_ids = decoder_input_ids[:,:-1]
         else:
             labels = tok(decoder_label_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-        if args.hard_truncate_length > 0 and len(labels[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-            labels = labels[:,:args.hard_truncate_length]
+        # if len(labels[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+        #     labels = labels[:,:args.hard_truncate_length]
         end = time.time()
 #         if rank == 0:
 #             print(input_ids.size(), functools.reduce(lambda x,y: x*y, input_ids.size()), decoder_input_ids.size(), functools.reduce(lambda x,y: x*y, decoder_input_ids.size()))
@@ -606,7 +692,7 @@ def generate_batches_lm(tok, args, rank, files): ## Address compatibilities of t
     for l in language_list:
         file_content = open(files[l]+"."+"%02d" % rank).readlines()
         probs[l] = len(file_content)
-        language_file_dict[l] = yield_corpus_indefinitely_mono(file_content, l)
+        language_file_dict[l] = yield_corpus_indefinitely_mono(file_content, l, args.sorted_batching)
     probs_temp = {lang: probs[lang]/sum(probs.values()) for lang in probs}
     probs = probs_temp
     probs_temp = {lang: probs[lang]**(1.0/args.data_sampling_temperature) for lang in probs} ## Temperature sampling probabilities.
@@ -631,7 +717,7 @@ def generate_batches_lm(tok, args, rank, files): ## Address compatibilities of t
                 lang = "<2"+language_list[language_idx]+">"
                 sentence_split = sentence.split(" ")
                 sent_len = len(sentence_split)
-                if sent_len < 1: 
+                if sent_len < 10: ## Extremely short docs.
                     continue
             if args.train_with_meta and not has_rem and random.random() <= 0.2: ## Use the first part of the document only 20% of the time.
                 randidx = 0
@@ -666,10 +752,12 @@ def generate_batches_lm(tok, args, rank, files): ## Address compatibilities of t
             input_ids = tok(input_batch, return_tensors="pt", padding=True).input_ids
         else:
             input_ids = tok(input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-        if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-            input_ids = input_ids[:,:args.hard_truncate_length]
+        if len(input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+            input_ids = input_ids[:,:args.hard_truncate_length+1]
         labels = input_ids[:,1:]
         input_ids = input_ids[:,:-1]
+        if input_ids.size()[1] == 0:
+            continue
         end = time.time()
         yield input_ids, labels
     
@@ -686,10 +774,17 @@ def grad_status(model):
     return (par.requires_grad for par in model.parameters())
 
 
-def freeze_params(model):
+def freeze_params(model, exception="none"):
     """Set requires_grad=False for each of model.parameters() thereby freezing those parameters. We use this when we want to prevent parts of the model from being trained."""
-    for par in model.parameters():
-        par.requires_grad = False
+    if exception is "none":
+        for par in model.parameters():
+            par.requires_grad = False
+    elif exception is not None:
+        exception = exception.split(",")
+        for name, par in model.named_parameters():
+            if not any(individual_exception in name for individual_exception in exception):
+                print("Freezing", name)
+                par.requires_grad = False
 
 def freeze_embeds(model):
     """Freeze token embeddings and positional embeddings for bart, just token embeddings for mbart."""
@@ -730,9 +825,22 @@ def generate_batches_eval_bilingual(tok, args, file, slang):
             sent_len = args.max_src_length
         
         if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
+            iids = tok(src_sent, return_tensors="pt").input_ids
+            sent_len = len(iids[0])
+            if sent_len > args.hard_truncate_length:
+                src_sent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                sent_len = args.hard_truncate_length
             encoder_input_batch.append(src_sent)
-        else:
-            encoder_input_batch.append(src_sent + " </s> " + lang)
+        else: ## Truncation code is the same as in the "if case" but replicating it just for clarity. Coincidentally the truncation indices are the same.
+            iids = tok(lang + " " + src_sent + " </s>", add_special_tokens=False, return_tensors="pt").input_ids
+            sent_len = len(iids[0])
+            if sent_len > args.hard_truncate_length:
+                src_sent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                sent_len = args.hard_truncate_length
+            if args.use_official_pretrained and "50" in args.pretrained_model: ## mbart-50 model has a different input representation
+                encoder_input_batch.append(lang + " " + src_sent + " </s>")
+            else:
+                encoder_input_batch.append(src_sent + " </s> " + lang)
         if args.multi_source: ## Process the batch for the additional source as well.
             src_sent_split_parent = src_sent_parent.split(" ")
             sent_len_parent = len(src_sent_split_parent)
@@ -740,8 +848,25 @@ def generate_batches_eval_bilingual(tok, args, file, slang):
                 src_sent_split_parent=src_sent_split_parent[:args.max_src_length]
                 src_sent_parent = " ".join(src_sent_split_parent)
                 sent_len_parent = args.max_src_length
+            if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
+                iids = tok(src_sent_parent, return_tensors="pt").input_ids
+                sent_len_parent = len(iids[0])
+                if sent_len_parent > args.hard_truncate_length:
+                    src_sent_parent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    sent_len_parent = args.hard_truncate_length
+                encoder_input_batch_parent.append(src_sent_parent)
+            else: ## Truncation code is the same as in the "if case" but replicating it just for clarity. Coincidentally the truncation indices are the same.
+                iids = tok(lang_parent + " " + src_sent_parent + " </s>", add_special_tokens=False, return_tensors="pt").input_ids
+                sent_len_parent = len(iids[0])
+                if sent_len_parent > args.hard_truncate_length:
+                    src_sent_parent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    sent_len_parent = args.hard_truncate_length
+                if args.use_official_pretrained and "50" in args.pretrained_model: ## mbart-50 model has a different input representation
+                    encoder_input_batch_parent.append(lang_parent + " " + src_sent_parent + " </s>")
+                else:
+                    encoder_input_batch_parent.append(src_sent_parent + " </s> " + lang_parent)
 
-            encoder_input_batch_parent.append(src_sent_parent + " </s> " + lang_parent)
+            
 
         curr_batch_count += 1
         if curr_batch_count == args.dev_batch_size:
@@ -749,14 +874,14 @@ def generate_batches_eval_bilingual(tok, args, file, slang):
                 input_ids = tok(encoder_input_batch, return_tensors="pt", padding=True).input_ids
             else:
                 input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
-                input_ids = input_ids[:,:args.hard_truncate_length]
+            # if len(input_ids[0]) > args.hard_truncate_length:
+            #     input_ids = input_ids[:,:args.hard_truncate_length]
             input_masks = (input_ids != tok.pad_token_id).int()
             
             if args.multi_source: ## Process the batch for the additional source as well.
                 input_ids_parent = tok(encoder_input_batch_parent, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-                if args.hard_truncate_length > 0 and len(input_ids_parent[0]) > args.hard_truncate_length:
-                    input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
+                # if len(input_ids_parent[0]) > args.hard_truncate_length:
+                #     input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
                 input_masks_parent = (input_ids_parent != tok.pad_token_id).int()
                 #print(input_ids.size(), input_ids_parent.size())
                 yield [input_ids, input_ids_parent], [input_masks, input_masks_parent]
@@ -773,14 +898,14 @@ def generate_batches_eval_bilingual(tok, args, file, slang):
             input_ids = tok(encoder_input_batch, return_tensors="pt", padding=True).input_ids
         else:
             input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-        if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
-            input_ids = input_ids[:,:args.hard_truncate_length]
+        # if len(input_ids[0]) > args.hard_truncate_length:
+        #     input_ids = input_ids[:,:args.hard_truncate_length]
         input_masks = (input_ids != tok.pad_token_id).int()
         
         if args.multi_source: ## Process the batch for the additional source as well.
             input_ids_parent = tok(encoder_input_batch_parent, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(input_ids_parent[0]) > args.hard_truncate_length:
-                input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
+            # if len(input_ids_parent[0]) > args.hard_truncate_length:
+            #     input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
             input_masks_parent = (input_ids_parent != tok.pad_token_id).int()
             yield [input_ids, input_ids_parent], [input_masks, input_masks_parent]
         else:
@@ -818,7 +943,7 @@ def generate_batches_bilingual(tok, args, files, rank):
         tgt_file_content = open(files[l][1]+"."+"%02d" % rank).readlines()
         probs[l] = len(src_file_content)
         file_content = list(zip(src_file_content, tgt_file_content))
-        language_file_dict[l] = yield_corpus_indefinitely_bi(file_content, l)
+        language_file_dict[l] = yield_corpus_indefinitely_bi(file_content, l, args.sorted_batching)
     print("Corpora stats:", probs)
     probs_temp = {lang: probs[lang]/sum(probs.values()) for lang in probs}
     probs = probs_temp
@@ -826,6 +951,11 @@ def generate_batches_bilingual(tok, args, files, rank):
     probs = probs_temp
     probs_temp = {lang: probs[lang]/sum(probs.values()) for lang in probs}
     probs = [probs_temp[lang] for lang in language_list]
+    dropped_source_sentence = "" ## We will save the source sentence to be dropped this batch and add it to the next batch.
+    dropped_target_sentence = "" ## We will save the target sentence to be dropped this batch and add it to the next batch.
+    dropped_language = "" ## We will save the language indicator to be dropped this batch and add it to the next batch.
+    if args.cross_distillation or args.multi_source: ## We assume an additional source language.
+        dropped_source_sentence_parent = "" ## We will save the source parent sentence to be dropped this batch and add it to the next batch.
     while batch_count != args.num_batches:
         curr_batch_count = 0
         encoder_input_batch = []
@@ -834,23 +964,19 @@ def generate_batches_bilingual(tok, args, files, rank):
         batch_count += 1
         max_src_sent_len = 0
         max_tgt_sent_len = 0
-        prev_max_src_sent_len = 0
-        prev_max_tgt_sent_len = 0
         start = time.time()
         sents_in_batch = 0
-        dropped_source_sentence = "" ## We will save the source sentence to be dropped this batch and add it to the next batch.
-        dropped_target_sentence = "" ## We will save the target sentence to be dropped this batch and add it to the next batch.
         if args.cross_distillation or args.multi_source: ## We assume an additional source language.
             max_src_sent_len_parent = 0
-            prev_max_src_sent_len_parent = 0
             encoder_input_batch_parent = []
-            dropped_source_sentence_parent = "" ## We will save the source sentence to be dropped this batch and add it to the next batch.
         if args.num_domains_for_domain_classifier > 1:
             domain_classifier_labels = []
         while True:
             if dropped_source_sentence != "":
+                language = dropped_language # Reuse the previous language indicator
                 src_sent = dropped_source_sentence # Reuse the previous source sentence
                 tgt_sent = dropped_target_sentence # Reuse the previous target sentence
+                dropped_language = ""
                 dropped_source_sentence = ""
                 dropped_target_sentence = ""
                 if args.cross_distillation or args.multi_source: ## We assume an additional source language.
@@ -878,7 +1004,7 @@ def generate_batches_bilingual(tok, args, files, rank):
             tgt_sent_len = len(tgt_sent_split)
             src_sent_len = len(src_sent_split)
             
-            if src_sent_len <=1 or tgt_sent_len <=1:
+            if src_sent_len < 1 or tgt_sent_len < 1:
                 continue
             else:   # Initial truncation
                 if src_sent_len >= args.max_src_length:
@@ -893,7 +1019,7 @@ def generate_batches_bilingual(tok, args, files, rank):
             if args.cross_distillation or args.multi_source:
                 src_sent_split_parent = src_sent_parent.split(" ")
                 src_sent_len_parent = len(src_sent_split_parent)
-                if src_sent_len_parent <=1:
+                if src_sent_len_parent < 1:
                     continue
                 else:   # Initial truncation
                     if src_sent_len_parent >= args.max_src_length: ## The same sentence length constraint applies to Y as it does to X.
@@ -921,39 +1047,77 @@ def generate_batches_bilingual(tok, args, files, rank):
                             continue
                         idx_to_mask = random.randint(sent_len//2 if args.future_prediction else 0, (curr_sent_len-1)-(span_to_mask-1))
                         if mask_tok not in src_sent_split[idx_to_mask:idx_to_mask+span_to_mask]:
+                            actually_masked_length = len(src_sent_split[idx_to_mask:idx_to_mask+span_to_mask]) ## If at the end of the sentence then we have likely masked fewer tokens.
                             src_sent_split[idx_to_mask:idx_to_mask+span_to_mask] = [mask_tok]
-                            mask_count += span_to_mask # We assume that with a low probability there are mask insertions when span lengths are 0 which may cause more mask tokens than planned. I have decided not to count these insersions towards the maximum maskable limit. This means that the total number of mask tokens will be a bit higher than what it should be. 
-                            curr_sent_len -= (span_to_mask-1)
+                            mask_count += actually_masked_length # We assume that with a low probability there are mask insertions when span lengths are 0 which may cause more mask tokens than planned. I have decided not to count these insersions towards the maximum maskable limit. This means that the total number of mask tokens will be a bit higher than what it should be. 
+                            curr_sent_len -= (actually_masked_length-1)
                     except:
                         break ## If we cannot get a properly masked sentence despite all our efforts then we just give up and continue with what we have so far.
                 src_sent = " ".join(src_sent_split)
+                if args.span_prediction or args.span_to_sentence_prediction: ## We only predict the masked spans and not other tokens.
+                    masked_sentence_split = src_sent.split(mask_tok)
+                    final_sentence = ""
+                    prev_idx = 0
+                    for span in masked_sentence_split:
+                        if span.strip() != "":
+                            extracted = tgt_sent[prev_idx:prev_idx+tgt_sent[prev_idx:].index(span)]
+                            final_sentence += extracted + " <s> "
+                            prev_idx=prev_idx+len(extracted) + len(span)
+
+                    final_sentence += tgt_sent[prev_idx:]
+                    final_sentence = final_sentence.strip()
+                    
+                    if (slang == tlang) and args.span_to_sentence_prediction:
+                        src_sent = final_sentence
+                    else:
+                        tgt_sent = final_sentence
+
             if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
                 iids = tok(src_sent, return_tensors="pt").input_ids
                 curr_src_sent_len = len(iids[0])
+                if curr_src_sent_len > args.hard_truncate_length:
+                    src_sent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_src_sent_len = args.hard_truncate_length
+                
+                iids = tok(tgt_sent, return_tensors="pt").input_ids
+                curr_tgt_sent_len = len(iids[0])
+                if curr_tgt_sent_len > args.hard_truncate_length:
+                    tgt_sent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_tgt_sent_len = args.hard_truncate_length
             else:
                 iids = tok(src_sent + " </s> " + slang, add_special_tokens=False, return_tensors="pt").input_ids
                 curr_src_sent_len = len(iids[0])
-            
-            if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
-                iids = tok(tgt_sent, return_tensors="pt").input_ids
-                curr_tgt_sent_len = len(iids[0])
-            else:
+                if curr_src_sent_len > args.hard_truncate_length:
+                    src_sent = tok.decode(iids[0][0:args.hard_truncate_length-2], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_src_sent_len = args.hard_truncate_length
+                
                 iids = tok(tlang + " " + tgt_sent, add_special_tokens=False, return_tensors="pt").input_ids
                 curr_tgt_sent_len = len(iids[0])
+                if curr_tgt_sent_len > args.hard_truncate_length:
+                    tgt_sent = tok.decode(iids[0][1:args.hard_truncate_length], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    curr_tgt_sent_len = args.hard_truncate_length
             
             if args.cross_distillation or args.multi_source:
-                iids = tok(src_sent_parent + " </s> " + slang_parent, add_special_tokens=False, return_tensors="pt").input_ids
-                curr_src_sent_len_parent = len(iids[0])
+                if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
+                    iids = tok(src_sent_parent, add_special_tokens=False, return_tensors="pt").input_ids
+                    curr_src_sent_len_parent = len(iids[0])
+                    if curr_src_sent_len_parent > args.hard_truncate_length:
+                        src_sent_parent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                        curr_src_sent_len_parent = args.hard_truncate_length
+                else: ## Truncation code is the same as in the "if case" but replicating it just for clarity. Coincidentally the truncation indices are the same.
+                    iids = tok(src_sent_parent + " </s> " + slang_parent, add_special_tokens=False, return_tensors="pt").input_ids
+                    curr_src_sent_len_parent = len(iids[0])
+                    if curr_src_sent_len_parent > args.hard_truncate_length:
+                        src_sent_parent = tok.decode(iids[0][0:args.hard_truncate_length-2], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                        curr_src_sent_len_parent = args.hard_truncate_length
+                
                 if curr_src_sent_len_parent > max_src_sent_len_parent:
-                    prev_max_src_sent_len_parent = max_src_sent_len_parent
-                    max_src_sent_len_parent = curr_src_sent_len_parent    
+                    max_src_sent_len_parent = curr_src_sent_len_parent
 
             if curr_src_sent_len > max_src_sent_len:
-                prev_max_src_sent_len = max_src_sent_len
                 max_src_sent_len = curr_src_sent_len
             
             if curr_tgt_sent_len > max_tgt_sent_len:
-                prev_max_tgt_sent_len = max_tgt_sent_len
                 max_tgt_sent_len = curr_tgt_sent_len
             
             if args.batch_size_indicates_lines: ## Batch a fixed number of sentences. We can safely add the current example because we assume that the user knows the max batch size.
@@ -962,7 +1126,10 @@ def generate_batches_bilingual(tok, args, files, rank):
                     decoder_input_batch.append(tgt_sent)
 
                 else:
-                    encoder_input_batch.append(src_sent + " </s> " + slang)
+                    if args.use_official_pretrained and "50" in args.pretrained_model: ## mbart-50 model has a different input representation
+                        encoder_input_batch.append(slang + " " + src_sent + " </s>")
+                    else:
+                        encoder_input_batch.append(src_sent + " </s> " + slang)
                     if args.unify_encoder:
                         decoder_input_batch.append(tgt_sent + " </s> " + tlang)
                         decoder_label_batch.append(tgt_sent + " </s> " + tlang) ## This should not be used when we unify encoders.
@@ -985,20 +1152,33 @@ def generate_batches_bilingual(tok, args, files, rank):
                 else:
                     potential_batch_count = max(max_src_sent_len, max_tgt_sent_len)*(sents_in_batch+1) ## We limit ourselves based on the maximum of either source or target.
                 if potential_batch_count > args.batch_size: ## We will drop this sentence for now. It may be used in a future iteration. Note that this will be unreliable when we do stochastic subword segmentation.
-                    max_src_sent_len = prev_max_src_sent_len
-                    max_tgt_sent_len = prev_max_tgt_sent_len
-                    dropped_source_sentence = src_sent
-                    dropped_target_sentence = tgt_sent
+                    if curr_src_sent_len > args.batch_size or curr_tgt_sent_len > args.batch_size: ## Dangerous sentences. Drop them no matter what.
+                        dropped_source_sentence = ""
+                        dropped_target_sentence = ""
+                        dropped_source_sentence_parent = ""
+                        dropped_language = ""
+                    else:
+                        dropped_source_sentence = src_sent
+                        dropped_target_sentence = tgt_sent
+                        dropped_language = language 
                     if args.cross_distillation or args.multi_source:
-                        max_src_sent_len_parent = prev_max_src_sent_len_parent
-                        dropped_source_sentence_parent = src_sent_parent
+                        if curr_src_sent_len_parent > args.batch_size: ## Dangerous sentences. Drop them no matter what.
+                            dropped_source_sentence = ""
+                            dropped_target_sentence = ""
+                            dropped_source_sentence_parent = ""
+                            dropped_language = ""
+                        else:
+                            dropped_source_sentence_parent = src_sent_parent
                     break
                 if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
                     encoder_input_batch.append(src_sent)
                     decoder_input_batch.append(tgt_sent)
 
                 else:
-                    encoder_input_batch.append(src_sent + " </s> " + slang)
+                    if args.use_official_pretrained and "50" in args.pretrained_model: ## mbart-50 model has a different input representation
+                        encoder_input_batch.append(slang + " " + src_sent + " </s>")
+                    else:
+                        encoder_input_batch.append(src_sent + " </s> " + slang)
                     if args.unify_encoder:
                         decoder_input_batch.append(tgt_sent + " </s> " + tlang)
                         decoder_label_batch.append(tgt_sent + " </s> " + tlang) ## This should not be used when we unify encoders.
@@ -1022,26 +1202,26 @@ def generate_batches_bilingual(tok, args, files, rank):
             input_ids = tok(encoder_input_batch, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
         else:
             input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-        if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-            input_ids = input_ids[:,:args.hard_truncate_length]
+        # if len(input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+        #     input_ids = input_ids[:,:args.hard_truncate_length]
         input_masks = (input_ids != tok.pad_token_id).int()
         if args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
             decoder_input_ids = tok(decoder_input_batch, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
         else:
             decoder_input_ids = tok(decoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-        if args.hard_truncate_length > 0 and len(decoder_input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-            decoder_input_ids = decoder_input_ids[:,:args.hard_truncate_length]
+        # if len(decoder_input_ids[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+        #     decoder_input_ids = decoder_input_ids[:,:args.hard_truncate_length]
         if (args.use_official_pretrained and "bart" in args.pretrained_model and "mbart" not in args.pretrained_model) or args.tokenization_sampling: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
             labels = decoder_input_ids[:,1:]
             decoder_input_ids = decoder_input_ids[:,:-1]
         else:
             labels = tok(decoder_label_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(labels[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-                labels = labels[:,:args.hard_truncate_length]
+            # if len(labels[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+            #     labels = labels[:,:args.hard_truncate_length]
         if args.cross_distillation or args.multi_source:
             input_ids_parent = tok(encoder_input_batch_parent, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-            if args.hard_truncate_length > 0 and  len(input_ids_parent[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
-                input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
+            # if len(input_ids_parent[0]) > args.hard_truncate_length: ## Truncate again if we exceed the maximum sequence length.
+            #     input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
             input_masks_parent = (input_ids_parent != tok.pad_token_id).int()
             end = time.time()
             #print(input_ids.size(), input_ids_parent.size(), decoder_input_ids.size())
@@ -1055,7 +1235,7 @@ def generate_batches_bilingual(tok, args, files, rank):
                 yield input_ids, input_masks, decoder_input_ids, labels
 
             
-def generate_batches_pair(tok, args):
+def generate_batches_pair(tok, args): ## TODO: Fix for mbart and bart variants
     """Generates the source, target and source attention masks for the training set."""
     src_file = open(args.test_src)
     tgt_file = open(args.test_ref)
@@ -1075,7 +1255,7 @@ def generate_batches_pair(tok, args):
         tgt_sent_split = tgt_sent.split(" ")
         tgt_sent_len = len(tgt_sent_split)
         src_sent_len = len(src_sent_split)
-        if src_sent_len <=1 or tgt_sent_len <=1:
+        if src_sent_len < 1 or tgt_sent_len < 1:
             print("Big problem")
             #continue
         else:   # Initial truncation
@@ -1096,18 +1276,18 @@ def generate_batches_pair(tok, args):
         curr_batch_count += 1
         if curr_batch_count == args.batch_size:
             input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
+            if len(input_ids[0]) > args.hard_truncate_length:
                 input_ids = input_ids[:,:args.hard_truncate_length]
             input_masks = (input_ids != tok.pad_token_id).int()
             decoder_input_ids = tok(decoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(decoder_input_ids[0]) > args.hard_truncate_length:
+            if len(decoder_input_ids[0]) > args.hard_truncate_length:
                 decoder_input_ids = decoder_input_ids[:,:args.hard_truncate_length]
             if args.tokenization_sampling: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
                 labels = decoder_input_ids[:,1:]
                 decoder_input_ids = decoder_input_ids[:,:-1]
             else:
                 labels = tok(decoder_label_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-                if args.hard_truncate_length > 0 and len(labels[0]) > args.hard_truncate_length:
+                if len(labels[0]) > args.hard_truncate_length:
                     labels = labels[:,:args.hard_truncate_length]
             decoder_masks = (decoder_input_ids != tok.pad_token_id).int()
             end = time.time()
@@ -1119,7 +1299,7 @@ def generate_batches_pair(tok, args):
 
     if len(encoder_input_batch) != 0:
         input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-        if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
+        if len(input_ids[0]) > args.hard_truncate_length:
             input_ids = input_ids[:,:args.hard_truncate_length]
         input_masks = (input_ids != tok.pad_token_id).int()
         decoder_input_ids = tok(decoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
@@ -1128,12 +1308,12 @@ def generate_batches_pair(tok, args):
             decoder_input_ids = decoder_input_ids[:,:-1]
         else:
             labels = tok(decoder_label_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(labels[0]) > args.hard_truncate_length:
+            if len(labels[0]) > args.hard_truncate_length:
                 labels = labels[:,:args.hard_truncate_length]
         decoder_masks = (decoder_input_ids != tok.pad_token_id).int()
         yield input_ids, input_masks, decoder_input_ids, decoder_masks, labels
 
-def generate_batches_pair_masked(tok, args): ## TODO: Implement hard truncation logic here if something bugs out. In general dont use this its highly untested.
+def generate_batches_pair_masked(tok, args): ## TODO: Implement hard truncation logic here if something bugs out. In general dont use this its highly untested. ## TODO: Fix for mbart and bart variants
     """Generates the source, target and source attention masks for the training set."""
     if args.use_official_pretrained:
         mask_tok = "<mask>"
@@ -1154,7 +1334,7 @@ def generate_batches_pair_masked(tok, args): ## TODO: Implement hard truncation 
         tgt_sent_split = tgt_sent.split(" ")
         tgt_sent_len = len(tgt_sent_split)
         src_sent_len = len(src_sent_split)
-        if src_sent_len <=1 or src_sent_len >= 100 or tgt_sent_len <=1 or tgt_sent_len >= 100:
+        if src_sent_len < 1 or src_sent_len >= 100 or tgt_sent_len < 1 or tgt_sent_len >= 100:
             continue
         
         for pos_src in range(src_sent_len):
@@ -1175,15 +1355,15 @@ def generate_batches_pair_masked(tok, args): ## TODO: Implement hard truncation 
                 decoder_input_batch.append(tlang + " " + new_tgt_sent)
                 decoder_label_batch.append(new_tgt_sent + " </s>")
             input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
+            if len(input_ids[0]) > args.hard_truncate_length:
                 input_ids = input_ids[:,:args.hard_truncate_length]
             input_masks = (input_ids != tok.pad_token_id).int()
             decoder_input_ids = tok(decoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(decoder_input_ids[0]) > args.hard_truncate_length:
+            if len(decoder_input_ids[0]) > args.hard_truncate_length:
                 decoder_input_ids = decoder_input_ids[:,:args.hard_truncate_length]
             tgt_masks = (decoder_input_ids != tok.pad_token_id).int()
             labels = tok(decoder_label_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(labels[0]) > args.hard_truncate_length:
+            if len(labels[0]) > args.hard_truncate_length:
                 labels = labels[:,:args.hard_truncate_length]
             end = time.time()
 
@@ -1253,17 +1433,31 @@ def generate_batches_for_decoding(tok, args):
                         continue
                     idx_to_mask = random.randint(sent_len//2 if args.future_prediction else 0, (curr_sent_len-1)-(span_to_mask-1))
                     if mask_tok not in src_sent_split[idx_to_mask:idx_to_mask+span_to_mask]:
+                        actually_masked_length = len(src_sent_split[idx_to_mask:idx_to_mask+span_to_mask]) ## If at the end of the sentence then we have likely masked fewer tokens.
                         src_sent_split[idx_to_mask:idx_to_mask+span_to_mask] = [mask_tok]
-                        mask_count += span_to_mask # We assume that with a low probability there are mask insertions when span lengths are 0 which may cause more mask tokens than planned. I have decided not to count these insersions towards the maximum maskable limit. This means that the total number of mask tokens will be a bit higher than what it should be. 
-                        curr_sent_len -= (span_to_mask-1)
+                        mask_count += actually_masked_length # We assume that with a low probability there are mask insertions when span lengths are 0 which may cause more mask tokens than planned. I have decided not to count these insersions towards the maximum maskable limit. This means that the total number of mask tokens will be a bit higher than what it should be. 
+                        curr_sent_len -= (actually_masked_length-1)
                 except:
                     break ## If we cannot get a properly masked sentence despite all our efforts then we just give up and continue with what we have so far.
             src_sent = " ".join(src_sent_split)
         
         if args.use_official_pretrained and "bart" in args.model_path and "mbart" not in args.model_path: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
+            iids = tok(src_sent, return_tensors="pt").input_ids
+            sent_len = len(iids[0])
+            if sent_len > args.hard_truncate_length:
+                src_sent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                sent_len = args.hard_truncate_length
             encoder_input_batch.append(src_sent)
-        else:
-            encoder_input_batch.append(src_sent + " </s> " + lang)
+        else: ## Truncation code is the same as in the "if case" but replicating it just for clarity. Coincidentally the truncation indices are the same.
+            iids = tok(src_sent + " </s> " + lang, add_special_tokens=False, return_tensors="pt").input_ids
+            sent_len = len(iids[0])
+            if sent_len > args.hard_truncate_length:
+                src_sent = tok.decode(iids[0][0:args.hard_truncate_length-2], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                sent_len = args.hard_truncate_length
+            if args.use_official_pretrained and "50" in args.model_path: ## mbart-50 model has a different input representation
+                encoder_input_batch.append(lang + " " + src_sent + " </s>")
+            else:
+                encoder_input_batch.append(src_sent + " </s> " + lang)
 
         if args.multi_source: ## Process the batch for the additional source as well.
             src_sent_split_parent = src_sent_parent.split(" ")
@@ -1272,8 +1466,24 @@ def generate_batches_for_decoding(tok, args):
                 src_sent_split_parent=src_sent_split_parent[:args.max_src_length]
                 src_sent_parent = " ".join(src_sent_split_parent)
                 sent_len_parent = args.max_src_length
-
-            encoder_input_batch_parent.append(src_sent_parent + " </s> " + lang_parent)
+            if args.use_official_pretrained and "bart" in args.model_path and "mbart" not in args.model_path: ## The bart tokenizer is wacky so we need to tweak the inputs a bit
+                iids = tok(src_sent_parent, return_tensors="pt").input_ids
+                sent_len_parent = len(iids[0])
+                if sent_len_parent > args.hard_truncate_length:
+                    src_sent_parent = tok.decode(iids[0][1:args.hard_truncate_length-1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    sent_len_parent = args.hard_truncate_length
+                encoder_input_batch.append(src_sent_parent)
+            else: ## Truncation code is the same as in the "if case" but replicating it just for clarity. Coincidentally the truncation indices are the same.
+                iids = tok(src_sent_parent + " </s> " + lang_parent, add_special_tokens=False, return_tensors="pt").input_ids
+                sent_len_parent = len(iids[0])
+                if sent_len_parent > args.hard_truncate_length:
+                    src_sent_parent = tok.decode(iids[0][0:args.hard_truncate_length-2], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    sent_len_parent = args.hard_truncate_length
+                if args.use_official_pretrained and "50" in args.model_path: ## mbart-50 model has a different input representation
+                    encoder_input_batch_parent.append(lang_parent + " " + src_sent_parent + " </s>")
+                else:
+                    encoder_input_batch_parent.append(src_sent_parent + " </s> " + lang_parent)
+            
             
         curr_batch_count += 1
         if curr_batch_count == args.batch_size:
@@ -1281,14 +1491,14 @@ def generate_batches_for_decoding(tok, args):
                 input_ids = tok(encoder_input_batch, return_tensors="pt", padding=True).input_ids
             else:
                 input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-            if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
-                input_ids = input_ids[:,:args.hard_truncate_length]
+            # if len(input_ids[0]) > args.hard_truncate_length:
+            #     input_ids = input_ids[:,:args.hard_truncate_length]
             input_masks = input_ids != tok.pad_token_id
             end = time.time()
             if args.multi_source: ## Process the batch for the additional source as well.
                 input_ids_parent = tok(encoder_input_batch_parent, add_special_tokens=False, return_tensors="pt", padding=True).input_ids
-                if args.hard_truncate_length > 0 and len(input_ids_parent[0]) > args.hard_truncate_length:
-                    input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
+                # if len(input_ids_parent[0]) > args.hard_truncate_length:
+                #     input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
                 input_masks_parent = (input_ids_parent != tok.pad_token_id).int()
                 yield [input_ids, input_ids_parent], [input_masks, input_masks_parent]
             else:
@@ -1303,13 +1513,13 @@ def generate_batches_for_decoding(tok, args):
             input_ids = tok(encoder_input_batch, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
         else:
             input_ids = tok(encoder_input_batch, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-        if args.hard_truncate_length > 0 and len(input_ids[0]) > args.hard_truncate_length:
-            input_ids = input_ids[:,:args.hard_truncate_length]
+        # if len(input_ids[0]) > args.hard_truncate_length:
+        #     input_ids = input_ids[:,:args.hard_truncate_length]
         input_masks = input_ids != tok.pad_token_id
         if args.multi_source: ## Process the batch for the additional source as well.
             input_ids_parent = tok(encoder_input_batch_parent, add_special_tokens=False, return_tensors="pt", padding=True, sample=args.tokenization_sampling, nbest=args.tokenization_nbest_list_size, alpha_or_dropout=args.tokenization_alpha_or_dropout).input_ids
-            if args.hard_truncate_length > 0 and len(input_ids_parent[0]) > args.hard_truncate_length:
-                input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
+            # if len(input_ids_parent[0]) > args.hard_truncate_length:
+            #     input_ids_parent = input_ids_parent[:,:args.hard_truncate_length]
             input_masks_parent = (input_ids_parent != tok.pad_token_id).int()
             yield [input_ids, input_ids_parent], [input_masks, input_masks_parent]
         else:
