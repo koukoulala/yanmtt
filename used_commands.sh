@@ -26,5 +26,7 @@ spm_train --input=my_input --model_prefix=en_clean_unigram --vocab_size=32000 --
 python create_autoconfig.py ./tokenizers/mbart-25 mbart ./data/sample.all .
 python create_autoconfig.py ./tokenizers/mbart-vienhi16k mbart ./data/sample.all .
 
-
+# 4.13
+python create_autoconfig_mBART.py data/sampled_data/combined_data.EN,data/sampled_data/combined_data.DE,data/sampled_data/combined_data.ZH 16000 tokenizers/mbart-test mbart "<2all>" 1000000 1
+python create_autoconfig_mBART.py ../MultilingualAdsGeneration/data/pre_train_data/combined_data 64000 tokenizers/mbart-ads mbart "<2all>" 1000000 1
 
