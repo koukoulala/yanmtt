@@ -85,8 +85,6 @@ lxml==4.6.3
 Markdown==3.3.4
 MarkupSafe==2.0.1
 matplotlib==3.3.4
-mecab==0.996.2
-mecab-python3==1.0.3
 missingno==0.5.0
 mistune==0.8.4
 mixture-of-experts==0.2.1
@@ -154,7 +152,6 @@ requests==2.25.1
 requests-oauthlib==1.3.0
 retry-decorator==1.1.1
 rouge==1.0.1
-rouge-score @ file:///share03/draj/data/monolingual_corpora/indic/xsum/xl-sum/multilingual_rouge_scoring
 rsa==4.7.2
 s3transfer==0.5.2
 sacrebleu==1.5.1
@@ -187,7 +184,6 @@ tornado==6.1
 tqdm==4.57.0
 traitlets==4.3.3
 transformers==4.3.2
-TurkishStemmer @ git+https://github.com/otuncelli/turkish-stemmer-python@0c22380bf84a5ab1f219f4a905274c78afa04ed1
 typing-extensions==3.10.0.0
 typish==1.9.2
 unidic==1.0.3

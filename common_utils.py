@@ -31,9 +31,9 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 
 ## Huggingface imports
 import transformers
-from transformers import AutoTokenizer, MBartTokenizer, MBart50Tokenizer, BartTokenizer
 from transformers import MBartForConditionalGeneration, MBartConfig, get_linear_schedule_with_warmup
 from transformers import AdamW
+from transformers import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
 ##
 
 
@@ -521,12 +521,12 @@ def generate_batches_monolingual_masked(tok, args, files, rank):
                 lang = language.strip().split("-")[0]
                 if args.no_lang_identifier:
                     lang = "all"
-                    print("Changing lang to: ", lang)
+                    # print("Changing lang to: ", lang)
                 lang = lang if args.use_official_pretrained else "<2"+lang+">"
             else:
                 if args.no_lang_identifier:
                     language = "all"
-                    print("Changing language to: ", language)
+                    # print("Changing language to: ", language)
                 lang = language if args.use_official_pretrained else "<2"+language+">"
             if type(mp_val_or_range) is float:
                 mask_percent = mp_val_or_range
@@ -723,7 +723,7 @@ def generate_batches_lm(tok, args, rank, files): ## Address compatibilities of t
                 tmp_lang = language_list[language_idx]
                 if args.no_lang_identifier:
                     tmp_lang = "all"
-                    print("Changing generate_batches_lm tmp_lang to: ", tmp_lang)
+                    #print("Changing generate_batches_lm tmp_lang to: ", tmp_lang)
                 lang = "<2"+tmp_lang+">"
                 sentence_split = sentence.split(" ")
                 sent_len = len(sentence_split)
@@ -820,11 +820,11 @@ def generate_batches_eval_bilingual(tok, args, file, slang):
         slang = slang[1]
         if args.no_lang_identifier:
             slang_parent = "all"
-            print("Changing generate_batches_eval_bilingual slang_parent to: ", slang_parent)
+            # print("Changing generate_batches_eval_bilingual slang_parent to: ", slang_parent)
         lang_parent = slang_parent if args.use_official_pretrained else "<2"+slang_parent+">"
     if args.no_lang_identifier:
         slang = "all"
-        print("Changing generate_batches_eval_bilingual slang to: ", slang)
+        # print("Changing generate_batches_eval_bilingual slang to: ", slang)
     lang = slang if args.use_official_pretrained else "<2"+slang+">"
     for src_line in src_file:
         start = time.time()
@@ -1010,7 +1010,7 @@ def generate_batches_bilingual(tok, args, files, rank):
             slangtlang = language.strip().split("-")
             if args.no_lang_identifier:
                 slangtlang = ["all" for i in slangtlang]
-                print("Changing generate_batches_bilingual slangtlang to: ", slangtlang)
+                # print("Changing generate_batches_bilingual slangtlang to: ", slangtlang)
             if args.cross_distillation or args.multi_source: ## In this case only we provide a hyphen separated triplet to represent languages X, Y and Z.
                 slang_parent = slangtlang[0] if args.use_official_pretrained else "<2"+slangtlang[0]+">"
                 slang = slangtlang[1] if args.use_official_pretrained else "<2"+slangtlang[1]+">"
@@ -1271,7 +1271,7 @@ def generate_batches_pair(tok, args): ## TODO: Fix for mbart and bart variants
         tmp_slang, tmp_tlang = args.slang, args.tlang
         if args.no_lang_identifier:
             tmp_slang, tmp_tlang = "all", "all"
-            print("Changing generate_batches_pair slang, tlang to: ", tmp_slang, tmp_tlang)
+            # print("Changing generate_batches_pair slang, tlang to: ", tmp_slang, tmp_tlang)
         slang = tmp_slang if args.use_official_pretrained else "<2"+tmp_slang+">"
         tlang = tmp_tlang if args.use_official_pretrained else "<2"+tmp_tlang+">"
         src_sent_split = src_sent.split(" ")
@@ -1354,7 +1354,7 @@ def generate_batches_pair_masked(tok, args): ## TODO: Implement hard truncation 
         tmp_slang, tmp_tlang = args.slang, args.tlang
         if args.no_lang_identifier:
             tmp_slang, tmp_tlang = "all", "all"
-            print("Changing generate_batches_pair_masked slang, tlang to: ", tmp_slang, tmp_tlang)
+            # print("Changing generate_batches_pair_masked slang, tlang to: ", tmp_slang, tmp_tlang)
         slang = tmp_slang if args.use_official_pretrained else "<2"+tmp_slang+">"
         tlang = tmp_tlang if args.use_official_pretrained else "<2"+tmp_tlang+">"
         src_sent_split = src_sent.split(" ")
@@ -1422,12 +1422,12 @@ def generate_batches_for_decoding(tok, args):
         slang = slang[1]
         if args.no_lang_identifier:
             slang_parent = "all"
-            print("Changing generate_batches_for_decoding slang_parent to: ", slang_parent)
+            # print("Changing generate_batches_for_decoding slang_parent to: ", slang_parent)
         lang_parent = slang_parent if args.use_official_pretrained else "<2"+slang_parent+">"
 
     if args.no_lang_identifier:
         slang = "all"
-        print("Changing generate_batches_for_decoding slang to: ", slang)
+        # print("Changing generate_batches_for_decoding slang to: ", slang)
     lang = slang if args.use_official_pretrained else "<2"+slang+">"
     
     if len(args.token_masking_probs_range) == 1:
@@ -1565,7 +1565,7 @@ def generate_batches_for_decoding_lm(tok, args):
     lang = args.lang
     if args.no_lang_identifier:
         lang = "all"
-        print("Changing generate_batches_for_decoding_lm lang to: ", lang)
+        # print("Changing generate_batches_for_decoding_lm lang to: ", lang)
     lang = lang if args.use_official_pretrained else "<2"+lang+">"
     
     for line in src_file:

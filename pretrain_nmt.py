@@ -31,7 +31,7 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 
 ## Huggingface imports
 import transformers
-from transformers import AutoTokenizer, MBartTokenizer, MBart50Tokenizer, BartTokenizer, AlbertTokenizer
+from transformers import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
 from transformers import MBartForConditionalGeneration, BartForConditionalGeneration, MBartConfig, get_linear_schedule_with_warmup
 from transformers import AdamW
 ##
@@ -50,7 +50,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 ## Our imports
 from common_utils import *
-from prefetch_generator import BackgroundGenerator
 ##
 
 ## Other imports
@@ -364,7 +363,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
                     if rank == 0:
                         writer.add_scalar("encoder unification loss", loss.detach().cpu().numpy(), ctr)
                 else:
-                    mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids, output_hidden_states=args.distillation, output_attentions=args.distillation, label_mask=label_mask if args.num_domains_for_domain_classifier > 1 else None) ## Run the model and get logits.
+                    mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids, output_hidden_states=args.distillation, output_attentions=args.distillation) ## Run the model and get logits.
                     logits = mod_compute.logits
                     lprobs = torch.nn.functional.log_softmax(logits, dim=-1) ## Softmax tempering of logits if needed.
                     loss = label_smoothed_nll_loss(
@@ -461,7 +460,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
                 if rank == 0:
                     writer.add_scalar("encoder unification loss", loss.detach().cpu().numpy(), ctr)
             else:
-                mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids, output_hidden_states=args.distillation, output_attentions=args.distillation, label_mask=label_mask if args.num_domains_for_domain_classifier > 1 else None) ## Run the model and get logits.
+                mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids, output_hidden_states=args.distillation, output_attentions=args.distillation) ## Run the model and get logits.
                 logits = mod_compute.logits
                 lprobs = torch.nn.functional.log_softmax(logits, dim=-1) ## Softmax tempering of logits if needed.
                 loss = label_smoothed_nll_loss(
@@ -804,6 +803,9 @@ def run_demo():
                         help='Should we use masking on source sentences when training on parallel corpora?')
     parser.add_argument('--is_summarization', action='store_true', 
                         help='Should we use masking on source sentences when training on parallel corpora?')
+
+    ### New parameters for pretrain mBART without language identifier
+    parser.add_argument('--no_lang_identifier', default=1, type=int, help="Whether to remove language identifier")
     ###
     args = parser.parse_args()
     assert len(args.token_masking_probs_range) <= 2

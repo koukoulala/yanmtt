@@ -32,7 +32,7 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # see issue #152
 
 ## Huggingface imports
 import transformers
-from transformers import AutoTokenizer, MBartTokenizer, MBart50Tokenizer, BartTokenizer, AlbertTokenizer
+from transformers import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
 from transformers import MBartForConditionalGeneration, BartForConditionalGeneration, MBartConfig, \
     get_linear_schedule_with_warmup
 from transformers import AdamW
@@ -52,36 +52,33 @@ from torch.utils.tensorboard import SummaryWriter
 
 ## Our imports
 from common_utils import *
-from prefetch_generator import BackgroundGenerator
 ##
 
 ## Other imports
 import random
 import numpy as np
-import math
-import sacrebleu
-import functools
-
 ##
 
 ## Seed setting here
 torch.manual_seed(621313)
-
 
 ##
 
 
 def model_create_load_run_save(gpu, args, files, train_files):
     """The main function which does the overall training. Should be split into multiple parts in the future. Currently monolithc intentionally."""
-    if args.shard_files:  ## First shard the data using process 0 aka the prime process or master process. Other processes will wait.
+    rank = args.nr * args.gpus + gpu  ## The rank of the current process out of the total number of processes indicated by world_size.
+    dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
+
+    if args.shard_files and rank == 0:  ## First shard the data using process 0 aka the prime process or master process. Other processes will wait.
         shard_files_mono(files, args)
         shard_files_bi(train_files, args)
 
+    dist.barrier()  ## Stop other processes from proceeding till sharding is done.
+
     if args.use_official_pretrained:
         if "mbart" in args.pretrained_model or "IndicBART" in args.pretrained_model:
-            if "50" in args.pretrained_model:
-                tok = MBart50Tokenizer.from_pretrained(args.tokenizer_name_or_path, use_fast=False)
-            elif "IndicBART" in args.pretrained_model:
+            if "IndicBART" in args.pretrained_model:
                 tok = MBartTokenizer.from_pretrained(args.tokenizer_name_or_path, do_lower_case=False, use_fast=False,
                                                      keep_accents=True)
             else:
@@ -115,6 +112,8 @@ def model_create_load_run_save(gpu, args, files, train_files):
     if args.unidirectional_encoder:
         print("Using unidirectional encoder.")
 
+    writer = SummaryWriter(args.model_path+".tflogs")
+
     if args.use_official_pretrained:
         if "mbart" in args.pretrained_model or "IndicBART" in args.model_path:
             config = MBartConfig.from_pretrained(args.pretrained_model)
@@ -130,10 +129,8 @@ def model_create_load_run_save(gpu, args, files, train_files):
             config.hypercomplex = args.hypercomplex  ## We should set hypercomplex_manually
             config.hypercomplex_n = args.hypercomplex_n  ## We should set hypercomplex_n_manually
             config.softmax_bias_tuning = args.softmax_bias_tuning  ## We should set softmax_bias_tuning_info_manually
-            model = MBartForConditionalGeneration.from_pretrained(args.pretrained_model,
-                                                                  config=config)  ## We may use FBs official model and fine-tune it for our purposes.
-            config.save_pretrained(
-                args.model_path + "_deploy")  ## Save the config as a json file to ensure easy loading during future fine tuning of the model.
+            model = MBartForConditionalGeneration.from_pretrained(args.pretrained_model, config=config)  ## We may use FBs official model and fine-tune it for our purposes.
+            config.save_pretrained(args.model_path + "_deploy")  ## Save the config as a json file to ensure easy loading during future fine tuning of the model.
     else:  ## We are going to manually specify our own model config.
         config = MBartConfig(vocab_size=len(tok), encoder_layers=args.encoder_layers,
                              decoder_layers=args.decoder_layers, dropout=args.dropout,
@@ -214,12 +211,12 @@ def model_create_load_run_save(gpu, args, files, train_files):
         parent_model.train()  ## We do this to enable dropout but we wont have an optimizer for this so we wont train this model. For now. Future implementations should ask if we want to do co-distill or not. By co-distillation I mean, the parent will learn together with the child.
         parent_model = DistributedDataParallel(parent_model, device_ids=[gpu], output_device=gpu)
         print("Loading a parent model from which distillation will be done.")
+        dist.barrier()
         # configure map_location properly
         map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
         if not args.use_official_parent_pretrained:
             parent_checkpoint_dict = torch.load(args.parent_pretrained_model, map_location=map_location)
-            if type(parent_checkpoint_dict) == dict:
-                parent_model.load_state_dict(parent_checkpoint_dict['model'])  # We never do any remapping of the parent. We always reuse it as it is.
+            if type(parent_checkpoint_dict) == dict:parent_model.load_state_dict(parent_checkpoint_dict['model'])  # We never do any remapping of the parent. We always reuse it as it is.
             else:
                 parent_model.module.load_state_dict(parent_checkpoint_dict)  # We never do any remapping of the parent. We always reuse it as it is.
 
@@ -262,6 +259,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
     print("Initial LR is:", scheduler.get_lr()[0])
     if args.pretrained_model != "" and not args.use_official_pretrained:  ## Here we load a previous checkpoint in case training crashed.
         print("Loading from checkpoint. Strict loading by default but if there are missing or non matching keys or if we use prompt or adaptor tuning, they will be ignored when layer remapping or component selection is done. In case of prompt and adaptor tuning, new params are added to the model and hence strict matching of keys is not possible.")
+        dist.barrier()
         map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
         sys.stdout.flush()
         checkpoint_dict = torch.load(args.pretrained_model, map_location=map_location)
@@ -293,7 +291,12 @@ def model_create_load_run_save(gpu, args, files, train_files):
                 model.module.initialize_prompt_params_with_random_embeddings()
         else:
             print("Training from scratch")
-        CHECKPOINT_PATH = args.model_path
+        CHECKPOINT_PATH = os.path.join(args.model_path, "model_first")
+        if rank == 0:
+            checkpoint_dict = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(), 'ctr': 0}
+            torch.save(checkpoint_dict, CHECKPOINT_PATH)  ## Save a model by default every eval_every steps. This model will be saved with the same file name each time.
+            torch.save(model.module.state_dict(), CHECKPOINT_PATH + ".pure_model")
+        dist.barrier()
         map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
         checkpoint_dict = torch.load(CHECKPOINT_PATH, map_location=map_location)
         model.load_state_dict(checkpoint_dict['model'])
@@ -313,12 +316,34 @@ def model_create_load_run_save(gpu, args, files, train_files):
     num_batches_this_optimizer_step = 0
     losses = 0
     rank = 0
+
     for (input_ids, input_masks, decoder_input_ids, labels), is_bilingual in generate_batches_monolingual_masked_or_bilingual(tok, args, rank, files, train_files):  # Batches are generated from here. The argument (0.30, 0.40) is a range which indicates the percentage of the source sentence to be masked in case we want masking during training just like we did during BART pretraining. The argument 3.5 is the lambda to the poisson length sampler which indicates the average length of a word sequence that will be masked. Since this is pretraining we do not do any evaluations even if we train on parallel corpora.
         start = time.time()
         optimizer.zero_grad()  ## Empty the gradients before any computation.
 
         if ctr % args.save_every == 0 and num_batches_this_optimizer_step == 0:  ## We have to evaluate our model every save_every steps. Since there is no evaluation data during pretraining this means our model is saved every save_every steps.
-            out_dir = os.path.join(args.model_path, "step_" + str(ctr))
+            CHECKPOINT_PATH = os.path.join(args.model_path, "model_intermediate")
+            if rank == 0:
+                print("Saving the model")
+                sys.stdout.flush()
+                # All processes should see same parameters as they all start from same
+                # random parameters and gradients are synchronized in backward passes.
+                # Therefore, saving it in one process is sufficient.
+                checkpoint_dict = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(), 'ctr': ctr}
+                torch.save(checkpoint_dict, CHECKPOINT_PATH) ## Save a model by default every save_every steps. This model will be saved with the same file name each time.
+                torch.save(model.module.state_dict(), CHECKPOINT_PATH + ".pure_model")
+            # Use a barrier() to make sure that process 1 loads the model after process 0 saves it.
+            dist.barrier()
+            # configure map_location properly
+            print("Loading from checkpoint")
+            map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
+            sys.stdout.flush()
+            checkpoint_dict = torch.load(CHECKPOINT_PATH, map_location=map_location)
+            model.load_state_dict(checkpoint_dict['model'])
+            optimizer.load_state_dict(checkpoint_dict['optimizer'])
+            scheduler.load_state_dict(checkpoint_dict['scheduler'])
+
+            out_dir = os.path.join(args.model_path, "intermediate_model")
             os.makedirs(out_dir, exist_ok=True)
             print("***** Saving ckpt at path ", out_dir)
             save_ckpt(args, model, tok, out_dir)
@@ -336,78 +361,61 @@ def model_create_load_run_save(gpu, args, files, train_files):
             encoder_pad = torch.tensor(torch.ones(input_shape[0], args.num_prompts).clone().detach().requires_grad_(True), dtype=torch.int64)
             input_masks = torch.cat([encoder_pad, input_masks], dim=1)
 
-        if is_bilingual and args.unify_encoder:
-            source_hidden_state_encoder = model.module.get_encoder()(input_ids=input_ids, attention_mask=input_masks).last_hidden_state  ## Run the encoder for source sentence.
-            decoder_input_masks = (decoder_input_ids != tok.pad_token_id).int().to(gpu)
-            target_hidden_state_encoder = model.module.get_encoder()(input_ids=decoder_input_ids, attention_mask=decoder_input_masks).last_hidden_state  ## Run the encoder for source sentence.
-            decoder_input_masks.to('cpu')  ## Move to CPU. May not be needed but its a safety net.
-            pad_mask = input_ids.eq(tok.pad_token_id).unsqueeze(2)
-            source_hidden_state_encoder.masked_fill_(pad_mask, 0.0)
-            source_hidden_state_encoder = source_hidden_state_encoder.mean(dim=1)
-            pad_mask = decoder_input_ids.eq(tok.pad_token_id).unsqueeze(2)
-            target_hidden_state_encoder.masked_fill_(pad_mask, 0.0)
-            target_hidden_state_encoder = target_hidden_state_encoder.mean(dim=1)
-            loss = -cosine_similarity(source_hidden_state_encoder, target_hidden_state_encoder)
-        else:
-            mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids,
-                                output_hidden_states=args.distillation, output_attentions=args.distillation, label_mask=None if args.num_domains_for_domain_classifier > 1 else None)  ## Run the model and get logits.
-            logits = mod_compute.logits
-            lprobs = torch.nn.functional.log_softmax(logits, dim=-1)  ## Softmax tempering of logits if needed.
-            loss = label_smoothed_nll_loss(
-                lprobs, labels, args.label_smoothing, ignore_index=tok.pad_token_id
-            )  ## Label smoothed cross entropy loss.
-            loss = loss * args.softmax_temperature  ## Up scale loss in case of non unitary temperatures.
+        mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids,
+                            output_hidden_states=args.distillation, output_attentions=args.distillation)  ## Run the model and get logits.
+        logits = mod_compute.logits
+        lprobs = torch.nn.functional.log_softmax(logits, dim=-1)  ## Softmax tempering of logits if needed.
+        loss = label_smoothed_nll_loss(
+            lprobs, labels, args.label_smoothing, ignore_index=tok.pad_token_id
+        )  ## Label smoothed cross entropy loss.
+        loss = loss * args.softmax_temperature  ## Up scale loss in case of non unitary temperatures.
+        if rank == 0:
+            writer.add_scalar("pure cross entropy loss", loss.detach().cpu().numpy(), ctr)
+        if args.temperature_calibration:
+            loss = loss * mod_compute.softmax_temperature
+            if rank == 0:
+                writer.add_scalar("calibrated temperature", mod_compute.softmax_temperature.detach().cpu().numpy(), ctr)
+                writer.add_scalar("calibrated temperature loss", loss.detach().cpu().numpy(), ctr)
+
+        ## We will do multilayer softmaxing without any consideration for entropy maximization or distillation.
+        if args.max_ent_weight != -1:  ## This deals with softmax entropy maximization. The logic is that we compute the softmax entropy of the predictions via -(P(Y/X)*log(P(Y/X))). We then add it to the cross entropy loss with a negative sign as we wish to maximize entropy. This should penalize overconfident predictions.
+            assert (args.max_ent_weight >= 0 and args.max_ent_weight <= 1)
+            logits = logits * args.softmax_temperature  ## We have to undo the tempered logits else our entropy estimate will be wrong.
             if args.temperature_calibration:
-                loss = loss * mod_compute.softmax_temperature
-
-            ## We will do multilayer softmaxing without any consideration for entropy maximization or distillation.
-            if mod_compute.additional_lm_logits is not None:
-                for additional_logits in mod_compute.additional_lm_logits:
-                    lprobs = torch.nn.functional.log_softmax(additional_logits, dim=-1)  ## Softmax tempering of logits if needed.
-                    loss_extra = label_smoothed_nll_loss(lprobs, labels, args.label_smoothing, ignore_index=tok.pad_token_id)  ## Label smoothed cross entropy loss.
-                    loss_extra = loss_extra * args.softmax_temperature  ## Up scale loss in case of non unitary temperatures. Note that in case of self calibrating temperature, the softmax temperature must be set to 1. TODO: Perhaps log this too.
-                    if args.temperature_calibration:
-                        loss_extra = loss_extra * mod_compute.softmax_temperature
-                    loss += loss_extra  ## Up scale loss in case of non unitary temperatures. TODO: Perhaps log this too.
-            if args.max_ent_weight != -1:  ## This deals with softmax entropy maximization. The logic is that we compute the softmax entropy of the predictions via -(P(Y/X)*log(P(Y/X))). We then add it to the cross entropy loss with a negative sign as we wish to maximize entropy. This should penalize overconfident predictions.
-                assert (args.max_ent_weight >= 0 and args.max_ent_weight <= 1)
-                logits = logits * args.softmax_temperature  ## We have to undo the tempered logits else our entropy estimate will be wrong.
-                if args.temperature_calibration:
-                    logits = logits * mod_compute.softmax_temperature
-                lprobs = torch.nn.functional.log_softmax(logits, dim=-1)  ## No tempering here
-                entropy = -(torch.exp(lprobs) * lprobs).mean()
-                if mod_compute.additional_lm_logits is not None:
-                    for additional_logits in mod_compute.additional_lm_logits:  ## Compute entropy for each layer as well
-                        additional_logits = additional_logits * args.softmax_temperature  ## We have to undo the tempered logits else our entropy estimate will be wrong.
-                        if args.temperature_calibration:
-                            additional_logits = additional_logits * mod_compute.softmax_temperature
-                        lprobs = torch.nn.functional.log_softmax(additional_logits, dim=-1)  ## No tempering here
-                        entropy_extra = -(torch.exp(lprobs) * lprobs).mean()
-                        entropy += entropy_extra
-                loss = loss * (1 - args.max_ent_weight) - entropy * args.max_ent_weight  ## Maximize the entropy so a minus is needed. Weigh and add losses as required.
-
-            if args.distillation:  ## Time to distill.
-                with torch.no_grad():  ## No gradient to avoid memory allocation.
-                    parent_mod_compute = parent_model(input_ids=input_ids, attention_mask=input_masks,
-                                                      decoder_input_ids=decoder_input_ids,
-                                                      output_hidden_states=args.distillation,
-                                                      output_attentions=args.distillation)  ## Get the parent model's computations.
-                distillation_loss = compute_distillation_losses(mod_compute, parent_mod_compute, labels, tok.pad_token_id, args)  ## Compute distillation losses.
-                loss = args.distillation_loss_weight * distillation_loss + (1.0 - args.distillation_loss_weight) * loss  ## Update the main loss with weighing and adding.
-
-            if args.use_moe:  ## add MOE losses too.
-                moe_loss = torch.sum(torch.stack(mod_compute.encoder_moe_losses)) + torch.sum(torch.stack(mod_compute.decoder_moe_losses))
-                loss += moe_loss
-            if args.contrastive_decoder_training:  ## Shuffle the decoder input and label batches and compute loss. This should be negated and added to the overall loss.
-                batch_size = decoder_input_ids.size()[0]
-                shuffle_indices = torch.randperm(batch_size)
-                decoder_input_ids = decoder_input_ids[shuffle_indices]
-                labels = labels[shuffle_indices]
-                mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids)  ## Run the model and get logits.
-                logits = mod_compute.logits
-                lprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-                contrastive_loss = label_smoothed_nll_loss(lprobs, labels, args.label_smoothing, ignore_index=tok.pad_token_id)  ## Label smoothed cross entropy loss.
-                loss -= contrastive_loss
+                logits = logits * mod_compute.softmax_temperature
+            lprobs = torch.nn.functional.log_softmax(logits, dim=-1)  ## No tempering here
+            entropy = -(torch.exp(lprobs) * lprobs).mean()
+            if rank == 0:
+                writer.add_scalar("softmax entropy", entropy.detach().cpu().numpy(), ctr)
+            loss = loss * (1 - args.max_ent_weight) - entropy * args.max_ent_weight  ## Maximize the entropy so a minus is needed. Weigh and add losses as required.
+            if rank == 0:
+                writer.add_scalar("loss with entropy loss", loss.detach().cpu().numpy(), ctr)
+        if args.distillation:  ## Time to distill.
+            with torch.no_grad():  ## No gradient to avoid memory allocation.
+                parent_mod_compute = parent_model(input_ids=input_ids, attention_mask=input_masks,
+                                                  decoder_input_ids=decoder_input_ids,
+                                                  output_hidden_states=args.distillation,
+                                                  output_attentions=args.distillation)  ## Get the parent model's computations.
+            distillation_loss = compute_distillation_losses(mod_compute, parent_mod_compute, labels, tok.pad_token_id, args)  ## Compute distillation losses.
+            loss = args.distillation_loss_weight * distillation_loss + (1.0 - args.distillation_loss_weight) * loss  ## Update the main loss with weighing and adding.
+            if rank == 0:
+                writer.add_scalar("distillation loss", distillation_loss.detach().cpu().numpy(), ctr)
+                writer.add_scalar("final loss", loss.detach().cpu().numpy(), ctr)
+        if args.use_moe:  ## add MOE losses too.
+            moe_loss = torch.sum(torch.stack(mod_compute.encoder_moe_losses)) + torch.sum(torch.stack(mod_compute.decoder_moe_losses))
+            if rank == 0:
+                writer.add_scalar("moe loss", moe_loss.detach().cpu().numpy(), ctr)
+            loss += moe_loss
+        if args.contrastive_decoder_training:  ## Shuffle the decoder input and label batches and compute loss. This should be negated and added to the overall loss.
+            batch_size = decoder_input_ids.size()[0]
+            shuffle_indices = torch.randperm(batch_size)
+            decoder_input_ids = decoder_input_ids[shuffle_indices]
+            labels = labels[shuffle_indices]
+            mod_compute = model(input_ids=input_ids, attention_mask=input_masks, decoder_input_ids=decoder_input_ids)  ## Run the model and get logits.
+            logits = mod_compute.logits
+            lprobs = torch.nn.functional.log_softmax(logits, dim=-1)
+            contrastive_loss = label_smoothed_nll_loss(lprobs, labels, args.label_smoothing, ignore_index=tok.pad_token_id)  ## Label smoothed cross entropy loss.
+            loss -= contrastive_loss
 
         loss = loss / args.multistep_optimizer_steps
         loss.backward()
@@ -427,14 +435,27 @@ def model_create_load_run_save(gpu, args, files, train_files):
             print("step = ", ctr, "loss = ", lv)
             sys.stdout.flush()
 
+        if ctr % 1000 == 0 and rank == 0 and args.save_weights_and_gradeint_info: ## Save the model weight and gradient info every time this condition is triggered.
+            for param_name, param_value in model.named_parameters():
+                if not ("embed_positions" in param_name and args.positional_encodings):
+                    writer.add_histogram("weights."+param_name, param_value.detach().cpu().numpy(), ctr)
+                    writer.add_histogram("gradients."+param_name, param_value.grad.detach().cpu().numpy(), ctr)
         end = time.time()
         ctr += 1
 
+    if rank == 0:
+        CHECKPOINT_PATH = os.path.join(args.model_path, "model_final")
+        checkpoint_dict = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(), 'ctr': ctr}
+        torch.save(checkpoint_dict, CHECKPOINT_PATH) ## Save one last time.
+        torch.save(model.module.state_dict(), CHECKPOINT_PATH+".pure_model") ## We will distribute this model and/or use it for fine tuning.
+
     out_dir = os.path.join(args.model_path, "final")
     os.makedirs(out_dir, exist_ok=True)
-    print("***** Saving ckpt at path ", out_dir)
+    print("***** Saving final ckpt at path ", out_dir)
     save_ckpt(args, model, tok, out_dir)
 
+    dist.barrier() ## Wait till all processes reach this point so that the prime process saves the final checkpoint.
+    dist.destroy_process_group()
 
 def run_demo():
     parser = argparse.ArgumentParser()
@@ -670,13 +691,13 @@ def run_demo():
     assert len(args.token_masking_probs_range) <= 2
     print("IP address is", args.ipaddr)
 
+    os.makedirs(args.model_path, exist_ok=True)
     args.world_size = args.gpus
 
-    if args.langs == "":
-        mono_src = [os.path.join(args.mono_src, file_name) for file_name in os.listdir(args.mono_src)]
-        langs = [file_name.split(".")[-1] for file_name in os.listdir(args.mono_src)]
+    langs = args.langs.strip().split("-")
+    if args.no_lang_identifier:
+        mono_src = [os.path.join(args.mono_src, file_name) for file_name in os.listdir(args.mono_src) if file_name.split('.')[-1] in langs]
     else:
-        langs = args.langs.strip().split(",")
         mono_src = args.mono_src.strip().split(",")
     files = {lang: mono_file for lang, mono_file in zip(langs, mono_src)}
     print("Monolingual training files are:", files)
@@ -687,6 +708,7 @@ def run_demo():
     os.environ['MASTER_ADDR'] = args.ipaddr  #
     os.environ['MASTER_PORT'] = '26023'  #
     mp.spawn(model_create_load_run_save, nprocs=args.gpus, args=(args, files, train_files,))  #
+    # model_create_load_run_save(args.gpus, args, files, train_files)
 
 
 if __name__ == "__main__":
