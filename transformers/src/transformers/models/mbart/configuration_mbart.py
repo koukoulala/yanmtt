@@ -158,6 +158,13 @@ class MBartConfig(PretrainedConfig):
         num_prompts=10, ## Argument to indicate how many prompts we should use.
         adaptor_tuning=False, ## Argument to indicate whether we should do adaptor tuning or not.
         deep_adaptor_tuning=False, ## Argument to indicate whether we should do deep adaptor tuning or not.
+        deep_adaptor_tuning_ffn_only=False, ## Argument to indicate whether we should do deep adaptor tuning for FFNs only or not.
+        parallel_adaptors=False, ## Argument to indicate whether we should do parallel adaptors or not.
+        layernorm_adaptor_input=False, ## Argument to indicate whether we should do layer normalization of adaptor input or not.
+        adaptor_scaling_factor=1.0,     ## Argument to indicate the scaling factor for adaptors.
+        residual_connection_adaptor=False, ## Argument to indicate whether we should do residual connection for adaptors or not.
+        encoder_adaptor_tying_config=None, ## Argument to control parameter tying in encoder adaptors. According to my RSNMT paper.
+        decoder_adaptor_tying_config=None, ## Argument to control parameter tying in decoder adaptors. According to my RSNMT paper.
         adaptor_hidden_size=128, ## Argument to indicate the hidden size of the adaptor.
         softmax_bias_tuning=False, ## Argument to indicate whether we should do softmax bias tuning or not.
         ## Modified by Raj Dabre. End.
@@ -194,7 +201,7 @@ class MBartConfig(PretrainedConfig):
         self.scale_embedding = scale_embedding  # scale factor will be sqrt(d_model) if True
         ## Modified by Raj Dabre. Start.
         self.encoder_tying_config = encoder_tying_config ## Argument to control parameter tying in encoder. According to my RSNMT paper.
-        self.decoder_tying_config = decoder_tying_config ## Argument to control parameter tying in encoder. According to my RSNMT paper. 
+        self.decoder_tying_config = decoder_tying_config ## Argument to control parameter tying in decoder. According to my RSNMT paper. 
         self.features_vocab_sizes = features_vocab_sizes  ## Argument to control feature based NMT. According to my paper with Abhisek. 
         self.features_embed_dims = features_embed_dims ## Argument to control feature based NMT. According to my paper with Abhisek.
         self.multilayer_softmaxing = multilayer_softmaxing ## Argument to control multi layer softmaxing. According to my multilayer softmaxing paper.
@@ -221,6 +228,13 @@ class MBartConfig(PretrainedConfig):
         self.num_prompts = num_prompts ## Argument to indicate how many prompts we should use.
         self.adaptor_tuning = adaptor_tuning ## Argument to indicate whether we should do adaptor tuning or not.
         self.deep_adaptor_tuning = deep_adaptor_tuning ## Argument to indicate whether we should do deep adaptor tuning or not.
+        self.deep_adaptor_tuning_ffn_only = deep_adaptor_tuning_ffn_only ## Argument to indicate whether we should do deep adaptor tuning only for FFN or not.
+        self.parallel_adaptors = parallel_adaptors ## Argument to indicate whether we should do parallel adaptors or not.
+        self.layernorm_adaptor_input = layernorm_adaptor_input ## Argument to indicate whether we should do layer normalization of adaptor input or not.
+        self.adaptor_scaling_factor = adaptor_scaling_factor ## Argument to indicate the scaling factor for adaptor.
+        self.residual_connection_adaptor = residual_connection_adaptor ## Argument to indicate whether we should do residual connection for adaptor or not.
+        self.encoder_adaptor_tying_config = encoder_adaptor_tying_config ## Argument to control parameter tying in encoder adaptors. According to my RSNMT paper.
+        self.decoder_adaptor_tying_config = decoder_adaptor_tying_config ## Argument to control parameter tying in decoder adaptors. According to my RSNMT paper. 
         self.adaptor_hidden_size = adaptor_hidden_size ## Argument to indicate the hidden size of the adaptor.
         self.softmax_bias_tuning = softmax_bias_tuning ## Argument to indicate whether we should do softmax bias tuning or not.
         ## Modified by Raj Dabre. End.
