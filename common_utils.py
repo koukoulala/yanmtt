@@ -30,10 +30,10 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 ##
 
 ## Huggingface imports
-import transformers
-from transformers import MBartForConditionalGeneration, MBartConfig, get_linear_schedule_with_warmup
-from transformers import AdamW
-from transformers import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
+import transformers_3
+from transformers_3 import MBartForConditionalGeneration, MBartConfig, get_linear_schedule_with_warmup
+from transformers_3 import AdamW
+from transformers_3 import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
 ##
 
 

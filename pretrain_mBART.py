@@ -31,11 +31,11 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # see issue #152
 ##
 
 ## Huggingface imports
-import transformers
-from transformers import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
-from transformers import MBartForConditionalGeneration, BartForConditionalGeneration, MBartConfig, \
+import transformers_3
+from transformers_3 import AutoTokenizer, MBartTokenizer, BartTokenizer, AlbertTokenizer
+from transformers_3 import MBartForConditionalGeneration, BartForConditionalGeneration, MBartConfig, \
     get_linear_schedule_with_warmup
-from transformers import AdamW
+from transformers_3 import AdamW
 ##
 
 
@@ -294,7 +294,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
         CHECKPOINT_PATH = os.path.join(args.model_path, "model_first")
         if rank == 0:
             checkpoint_dict = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(), 'ctr': 0}
-            torch.save(checkpoint_dict, CHECKPOINT_PATH)  ## Save a model by default every eval_every steps. This model will be saved with the same file name each time.
+            torch.save(checkpoint_dict, CHECKPOINT_PATH + ".dict")  ## Save a model by default every eval_every steps. This model will be saved with the same file name each time.
             torch.save(model.module.state_dict(), CHECKPOINT_PATH + ".pure_model")
         dist.barrier()
         map_location = {'cuda:%d' % 0: 'cuda:%d' % gpu}
@@ -330,7 +330,7 @@ def model_create_load_run_save(gpu, args, files, train_files):
                 # random parameters and gradients are synchronized in backward passes.
                 # Therefore, saving it in one process is sufficient.
                 checkpoint_dict = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(), 'ctr': ctr}
-                torch.save(checkpoint_dict, CHECKPOINT_PATH) ## Save a model by default every save_every steps. This model will be saved with the same file name each time.
+                torch.save(checkpoint_dict, CHECKPOINT_PATH + ".dict") ## Save a model by default every save_every steps. This model will be saved with the same file name each time.
                 torch.save(model.module.state_dict(), CHECKPOINT_PATH + ".pure_model")
             # Use a barrier() to make sure that process 1 loads the model after process 0 saves it.
             dist.barrier()
